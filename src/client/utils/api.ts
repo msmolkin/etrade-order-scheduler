@@ -1,0 +1,101 @@
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+
+export interface Order {
+  id: string;
+  accountId: string;
+  symbol: string;
+  securityType: string;
+  action: string;
+  orderType: string;
+  quantity: number;
+  limitPrice?: number;
+  stopPrice?: number;
+  preferredDuration: string;
+  actualDuration: string;
+  requiresDaily: boolean;
+  sessionTime: string;
+  scheduledFor?: string;
+  scheduleEnabled: boolean;
+  status: string;
+  etradeOrderId?: string;
+  submittedAt?: string;
+  filledAt?: string;
+  cancelledAt?: string;
+  expiresAt?: string;
+  lastError?: string;
+  retryCount: number;
+  maxRetries: number;
+  createdAt: string;
+  updatedAt: string;
+  notes?: string;
+}
+
+export async function fetchOrders(filters?: {
+  accountId?: string;
+  status?: string;
+  scheduleEnabled?: boolean;
+}): Promise<Order[]> {
+  const params = new URLSearchParams();
+  if (filters?.accountId) params.append('accountId', filters.accountId);
+  if (filters?.status) params.append('status', filters.status);
+  if (filters?.scheduleEnabled !== undefined)
+    params.append('scheduleEnabled', String(filters.scheduleEnabled));
+
+  const response = await fetch(`${API_BASE_URL}/orders?${params}`);
+  if (!response.ok) throw new Error('Failed to fetch orders');
+  return response.json();
+}
+
+export async function fetchExpiredOrders(limit?: number): Promise<Order[]> {
+  const params = new URLSearchParams();
+  if (limit) params.append('limit', String(limit));
+
+  const response = await fetch(`${API_BASE_URL}/orders/expired?${params}`);
+  if (!response.ok) throw new Error('Failed to fetch expired orders');
+  return response.json();
+}
+
+export async function createOrder(order: Partial<Order>): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(order),
+  });
+  if (!response.ok) throw new Error('Failed to create order');
+  return response.json();
+}
+
+export async function resendOrder(orderId: string): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}/resend`, {
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error('Failed to resend order');
+  return response.json();
+}
+
+export async function deleteOrder(orderId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error('Failed to delete order');
+}
+
+export async function fetchOptionsChain(
+  symbol: string,
+  expirationDate?: string
+): Promise<any> {
+  const params = new URLSearchParams({ symbol });
+  if (expirationDate) params.append('expirationDate', expirationDate);
+
+  const response = await fetch(`${API_BASE_URL}/orders/market/options-chain?${params}`);
+  if (!response.ok) throw new Error('Failed to fetch options chain');
+  return response.json();
+}
+
+export async function fetchQuote(symbols: string[]): Promise<any[]> {
+  const params = new URLSearchParams({ symbols: symbols.join(',') });
+
+  const response = await fetch(`${API_BASE_URL}/orders/market/quote?${params}`);
+  if (!response.ok) throw new Error('Failed to fetch quote');
+  return response.json();
+}

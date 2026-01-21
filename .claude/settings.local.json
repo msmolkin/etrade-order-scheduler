@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm init:*)",
+      "Bash(node --version:*)",
+      "Bash(brew --version:*)",
+      "Bash(brew install:*)",
+      "Bash(postgres:*)"
+    ]
+  }
+}

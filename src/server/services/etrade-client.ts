@@ -1,0 +1,190 @@
+import OAuth from 'oauth-1.0a';
+import crypto from 'crypto';
+import axios, { AxiosInstance } from 'axios';
+import type {
+  ETradeCredentials,
+  ETradeAccount,
+  ETradeOrderRequest,
+  ETradeOrderResponse,
+  ETradeQuote,
+  OptionsChain,
+} from '../../shared/types/index.js';
+
+export class ETradeClient {
+  private oauth: OAuth;
+  private credentials: ETradeCredentials;
+  private baseUrl: string;
+  private httpClient: AxiosInstance;
+
+  constructor(credentials: ETradeCredentials, sandbox: boolean = false) {
+    this.credentials = credentials;
+    this.baseUrl = sandbox
+      ? 'https://apisb.etrade.com'
+      : 'https://api.etrade.com';
+
+    this.oauth = new OAuth({
+      consumer: {
+        key: credentials.consumerKey,
+        secret: credentials.consumerSecret,
+      },
+      signature_method: 'HMAC-SHA1',
+      hash_function(base_string, key) {
+        return crypto.createHmac('sha1', key).update(base_string).digest('base64');
+      },
+    });
+
+    this.httpClient = axios.create({
+      baseURL: this.baseUrl,
+      timeout: 30000,
+    });
+  }
+
+  private getAuthHeader(url: string, method: string = 'GET') {
+    if (!this.credentials.accessToken || !this.credentials.accessTokenSecret) {
+      throw new Error('Access tokens not set. Please authenticate first.');
+    }
+
+    const token = {
+      key: this.credentials.accessToken,
+      secret: this.credentials.accessTokenSecret,
+    };
+
+    const authData = this.oauth.authorize({ url, method }, token);
+    return this.oauth.toHeader(authData);
+  }
+
+  async getAccounts(): Promise<ETradeAccount[]> {
+    const url = `${this.baseUrl}/v1/accounts/list`;
+    const headers = this.getAuthHeader(url);
+
+    const response = await this.httpClient.get('/v1/accounts/list', { headers });
+    return response.data.AccountListResponse.Accounts.Account;
+  }
+
+  async placeOrder(request: ETradeOrderRequest): Promise<ETradeOrderResponse> {
+    const url = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/place`;
+    const headers = this.getAuthHeader(url, 'POST');
+
+    const orderData = {
+      PlaceOrderRequest: {
+        orderType: 'EQ',
+        clientOrderId: request.clientOrderId,
+        Order: [
+          {
+            allOrNone: request.allOrNone || false,
+            priceType: request.priceType,
+            orderTerm: request.orderTerm,
+            marketSession: request.marketSession,
+            stopPrice: request.stopPrice,
+            limitPrice: request.limitPrice,
+            Instrument: [
+              {
+                Product: {
+                  securityType: 'EQ',
+                  symbol: request.symbol,
+                },
+                orderAction: request.orderAction,
+                quantityType: 'QUANTITY',
+                quantity: request.quantity,
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    const response = await this.httpClient.post(
+      `/v1/accounts/${request.accountIdKey}/orders/place`,
+      orderData,
+      { headers }
+    );
+
+    return response.data.PlaceOrderResponse;
+  }
+
+  async getOrderStatus(accountIdKey: string, orderId: string): Promise<ETradeOrderResponse> {
+    const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/orders/${orderId}`;
+    const headers = this.getAuthHeader(url);
+
+    const response = await this.httpClient.get(
+      `/v1/accounts/${accountIdKey}/orders/${orderId}`,
+      { headers }
+    );
+
+    return response.data.OrdersResponse.Order[0];
+  }
+
+  async cancelOrder(accountIdKey: string, orderId: string): Promise<void> {
+    const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/orders/cancel`;
+    const headers = this.getAuthHeader(url, 'PUT');
+
+    await this.httpClient.put(
+      `/v1/accounts/${accountIdKey}/orders/cancel`,
+      { CancelOrderRequest: { orderId } },
+      { headers }
+    );
+  }
+
+  async getQuote(symbols: string[]): Promise<ETradeQuote[]> {
+    const url = `${this.baseUrl}/v1/market/quote/${symbols.join(',')}`;
+    const headers = this.getAuthHeader(url);
+
+    const response = await this.httpClient.get(`/v1/market/quote/${symbols.join(',')}`, {
+      headers,
+    });
+
+    return response.data.QuoteResponse.QuoteData;
+  }
+
+  async getOptionsChain(
+    symbol: string,
+    expirationDate?: string
+  ): Promise<OptionsChain> {
+    let url = `${this.baseUrl}/v1/market/optionchains?symbol=${symbol}`;
+    if (expirationDate) {
+      url += `&expiryDate=${expirationDate}`;
+    }
+
+    const headers = this.getAuthHeader(url);
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers });
+
+    const chainData = response.data.OptionChainResponse;
+
+    // Transform E*TRADE response to our format
+    return {
+      symbol,
+      underlyingPrice: chainData.SelectedED?.UnderlyingPrice || 0,
+      expirationDates: chainData.ExpirationDate || [],
+      strikes: chainData.OptionPair?.map((pair: any) => pair.Call?.strikePrice || pair.Put?.strikePrice) || [],
+      calls: chainData.OptionPair?.map((pair: any) => this.transformOptionContract(pair.Call, 'CALL')).filter(Boolean) || [],
+      puts: chainData.OptionPair?.map((pair: any) => this.transformOptionContract(pair.Put, 'PUT')).filter(Boolean) || [],
+    };
+  }
+
+  private transformOptionContract(contract: any, type: 'CALL' | 'PUT'): any {
+    if (!contract) return null;
+
+    return {
+      symbol: contract.optionSymbol || '',
+      optionType: type,
+      strikePrice: contract.strikePrice || 0,
+      expirationDate: contract.expirationDate || '',
+      bid: contract.bid || 0,
+      ask: contract.ask || 0,
+      last: contract.lastPrice || 0,
+      volume: contract.volume || 0,
+      openInterest: contract.openInterest || 0,
+      impliedVolatility: contract.iv,
+      delta: contract.delta,
+      gamma: contract.gamma,
+      theta: contract.theta,
+      vega: contract.vega,
+      inTheMoney: contract.inTheMoney || false,
+    };
+  }
+
+  setAccessTokens(accessToken: string, accessTokenSecret: string) {
+    this.credentials.accessToken = accessToken;
+    this.credentials.accessTokenSecret = accessTokenSecret;
+  }
+}
