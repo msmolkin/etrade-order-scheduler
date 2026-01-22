@@ -26,6 +26,7 @@ export class OrderExecutor {
 
       // Prepare E*TRADE order request
       const etradeRequest = this.mapToETradeRequest(order);
+      console.log('E*TRADE request:', JSON.stringify(etradeRequest, null, 2));
 
       // Place order with E*TRADE
       const response = await this.etradeClient.placeOrder(etradeRequest);
@@ -110,19 +111,21 @@ export class OrderExecutor {
   }
 
   private mapToETradeRequest(order: Order): ETradeOrderRequest {
-    return {
+    const request: ETradeOrderRequest = {
       accountIdKey: order.accountId,
       symbol: order.symbol,
       orderAction: order.action,
-      clientOrderId: order.id,
+      clientOrderId: `order-${Date.now()}`,
       priceType: this.mapOrderType(order.orderType),
       quantity: order.quantity,
       orderTerm: this.mapDuration(order.actualDuration),
       marketSession: order.sessionTime === 'EXTENDED' ? 'EXTENDED' : 'REGULAR',
-      limitPrice: order.limitPrice,
-      stopPrice: order.stopPrice,
       allOrNone: false,
     };
+    // Only include price fields if they have values
+    if (order.limitPrice) request.limitPrice = order.limitPrice;
+    if (order.stopPrice) request.stopPrice = order.stopPrice;
+    return request;
   }
 
   private mapOrderType(orderType: string): 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT' {

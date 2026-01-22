@@ -189,6 +189,15 @@ export class OrderService {
 
   async acquireLock(orderId: string, lockerId: string): Promise<boolean> {
     return transaction(async (client: pg.PoolClient) => {
+      // First, ensure lock record exists (for immediate submissions)
+      await client.query(
+        `INSERT INTO scheduled_order_locks (order_id, scheduled_time, session_time, locked, locked_by, locked_at)
+         VALUES ($1, NOW(), 'MARKET', false, NULL, NULL)
+         ON CONFLICT (order_id) DO NOTHING`,
+        [orderId]
+      );
+
+      // Now try to acquire the lock
       const result = await client.query(
         `UPDATE scheduled_order_locks
          SET locked = true, locked_by = $2, locked_at = NOW()

@@ -36,6 +36,16 @@ export class ETradeClient {
     this.httpClient = axios.create({
       baseURL: this.baseUrl,
       timeout: 30000,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+    });
+
+    // Log requests for debugging
+    this.httpClient.interceptors.request.use((config) => {
+      console.log('Axios request:', config.method?.toUpperCase(), config.baseURL + config.url);
+      return config;
     });
   }
 
@@ -62,44 +72,70 @@ export class ETradeClient {
   }
 
   async placeOrder(request: ETradeOrderRequest): Promise<ETradeOrderResponse> {
-    const url = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/place`;
-    const headers = this.getAuthHeader(url, 'POST');
+    // Step 1: Preview the order
+    const previewUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/preview`;
+    console.log('Calling preview URL:', previewUrl);
+    const previewHeaders = this.getAuthHeader(previewUrl, 'POST');
 
-    const orderData = {
-      PlaceOrderRequest: {
-        orderType: 'EQ',
-        clientOrderId: request.clientOrderId,
-        Order: [
-          {
-            allOrNone: request.allOrNone || false,
-            priceType: request.priceType,
-            orderTerm: request.orderTerm,
-            marketSession: request.marketSession,
-            stopPrice: request.stopPrice,
-            limitPrice: request.limitPrice,
-            Instrument: [
-              {
-                Product: {
-                  securityType: 'EQ',
-                  symbol: request.symbol,
-                },
-                orderAction: request.orderAction,
-                quantityType: 'QUANTITY',
-                quantity: request.quantity,
+    const orderPayload = {
+      orderType: 'EQ',
+      clientOrderId: request.clientOrderId,
+      Order: [
+        {
+          allOrNone: request.allOrNone || false,
+          priceType: request.priceType,
+          orderTerm: request.orderTerm,
+          marketSession: request.marketSession,
+          stopPrice: request.stopPrice,
+          limitPrice: request.limitPrice,
+          Instrument: [
+            {
+              Product: {
+                securityType: 'EQ',
+                symbol: request.symbol,
               },
-            ],
-          },
-        ],
-      },
+              orderAction: request.orderAction,
+              quantityType: 'QUANTITY',
+              quantity: request.quantity,
+            },
+          ],
+        },
+      ],
     };
 
-    const response = await this.httpClient.post(
+    let previewResponse;
+    try {
+      console.log('Request payload:', JSON.stringify({ PreviewOrderRequest: orderPayload }, null, 2));
+      previewResponse = await this.httpClient.post(
+        `/v1/accounts/${request.accountIdKey}/orders/preview`,
+        { PreviewOrderRequest: orderPayload },
+        { headers: previewHeaders }
+      );
+    } catch (error: any) {
+      console.error('Preview error:', error.response?.status, error.response?.data);
+      console.error('Request config:', error.config?.url, error.config?.method);
+      throw error;
+    }
+
+    const previewId = previewResponse.data.PreviewOrderResponse.PreviewIds[0].previewId;
+    console.log(`✓ Order preview successful, previewId: ${previewId}`);
+
+    // Step 2: Place the order with previewId
+    const placeUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/place`;
+    const placeHeaders = this.getAuthHeader(placeUrl, 'POST');
+
+    const placeResponse = await this.httpClient.post(
       `/v1/accounts/${request.accountIdKey}/orders/place`,
-      orderData,
-      { headers }
+      {
+        PlaceOrderRequest: {
+          ...orderPayload,
+          PreviewIds: [{ previewId }],
+        },
+      },
+      { headers: placeHeaders }
     );
 
-    return response.data.PlaceOrderResponse;
+    return placeResponse.data.PlaceOrderResponse;
   }
 
   async getOrderStatus(accountIdKey: string, orderId: string): Promise<ETradeOrderResponse> {

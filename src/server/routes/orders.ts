@@ -191,6 +191,36 @@ router.get('/market/options-chain', async (req, res) => {
   }
 });
 
+// Test order placement (debug endpoint)
+router.post('/test-place', async (req, res) => {
+  try {
+    const client = getETradeClient();
+    console.log('Testing order placement from server...');
+
+    const result = await client.placeOrder({
+      accountIdKey: '[REDACTED]',
+      symbol: 'AAPL',
+      orderAction: 'BUY',
+      clientOrderId: 'test-' + Date.now(),
+      priceType: 'LIMIT',
+      quantity: 1,
+      orderTerm: 'GOOD_FOR_DAY',
+      marketSession: 'REGULAR',
+      limitPrice: 150,
+    });
+
+    res.json({ success: true, result });
+  } catch (error: any) {
+    console.error('Test place error:', error.response?.status, error.response?.data);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      status: error.response?.status,
+      data: error.response?.data
+    });
+  }
+});
+
 // Get quote
 router.get('/market/quote', async (req, res) => {
   try {
