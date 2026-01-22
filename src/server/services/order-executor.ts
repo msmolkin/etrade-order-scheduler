@@ -31,21 +31,27 @@ export class OrderExecutor {
       // Place order with E*TRADE
       const response = await this.etradeClient.placeOrder(etradeRequest);
 
-      // Check if order was successful
-      if (response.status === 'OPEN' || response.status === 'FILLED') {
+      // Check if order was successful - E*TRADE returns OrderIds array on success
+      const orderIds = (response as any).OrderIds;
+      if (orderIds && orderIds.length > 0 && orderIds[0].orderId) {
+        const etradeOrderId = orderIds[0].orderId.toString();
+
         await this.orderService.updateOrderStatus(order.id, 'FILLED', {
-          etradeOrderId: response.orderId.toString(),
+          etradeOrderId,
           filledAt: new Date(),
         });
 
         await this.orderService.logExecution(order.id, 'FILLED', {
-          etradeOrderId: response.orderId.toString(),
+          etradeOrderId,
         });
 
-        console.log(`✓ Order ${order.id} placed successfully. E*TRADE Order ID: ${response.orderId}`);
+        console.log(`✓ Order ${order.id} placed successfully. E*TRADE Order ID: ${etradeOrderId}`);
         return true;
       } else {
-        throw new Error(`Order rejected with status: ${response.status}`);
+        // Check for error messages in response
+        const errorMsg = (response as any).Order?.[0]?.messages?.Message?.[0]?.description
+          || 'Order placement failed - no OrderIds returned';
+        throw new Error(errorMsg);
       }
     } catch (error: any) {
       const errorMessage = error?.message || 'Unknown error';
