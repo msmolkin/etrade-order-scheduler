@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import http from 'http';
 import dotenv from 'dotenv';
 import ordersRouter from './routes/orders.js';
+import authRouter from './routes/auth.js';
 import { healthCheck } from './database/client.js';
 
 dotenv.config();
@@ -27,6 +28,7 @@ app.get('/health', async (req, res) => {
 
 // Routes
 app.use('/api/orders', ordersRouter);
+app.use('/api/auth', authRouter);
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -75,6 +77,10 @@ server.listen(port, () => {
   console.log(`E*TRADE Mode: ${process.env.ETRADE_SANDBOX === 'true' ? 'SANDBOX' : 'PRODUCTION'}`);
   console.log('\nEndpoints:');
   console.log('  GET    /health');
+  console.log('  GET    /api/auth/status');
+  console.log('  GET    /api/auth/start');
+  console.log('  GET    /api/auth/callback');
+  console.log('  POST   /api/auth/verify');
   console.log('  GET    /api/orders');
   console.log('  POST   /api/orders');
   console.log('  GET    /api/orders/:id');

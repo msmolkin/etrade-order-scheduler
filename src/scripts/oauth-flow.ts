@@ -15,11 +15,19 @@ const API_URL = SANDBOX
   ? 'https://apisb.etrade.com'
   : 'https://api.etrade.com';
 
-const CONSUMER_KEY = process.env.ETRADE_CONSUMER_KEY;
-const CONSUMER_SECRET = process.env.ETRADE_CONSUMER_SECRET;
+// Use sandbox keys when in sandbox mode, otherwise use production keys
+const CONSUMER_KEY = SANDBOX
+  ? process.env.ETRADE_SANDBOX_KEY
+  : process.env.ETRADE_CONSUMER_KEY;
+const CONSUMER_SECRET = SANDBOX
+  ? process.env.ETRADE_SANDBOX_SECRET
+  : process.env.ETRADE_CONSUMER_SECRET;
 
 if (!CONSUMER_KEY || !CONSUMER_SECRET) {
-  console.error('Error: ETRADE_CONSUMER_KEY and ETRADE_CONSUMER_SECRET must be set in .env');
+  const keyNames = SANDBOX
+    ? 'ETRADE_SANDBOX_KEY and ETRADE_SANDBOX_SECRET'
+    : 'ETRADE_CONSUMER_KEY and ETRADE_CONSUMER_SECRET';
+  console.error(`Error: ${keyNames} must be set in .env`);
   process.exit(1);
 }
 
