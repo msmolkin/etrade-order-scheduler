@@ -77,30 +77,37 @@ export class ETradeClient {
     console.log('Calling preview URL:', previewUrl);
     const previewHeaders = this.getAuthHeader(previewUrl, 'POST');
 
+    // Build order details, only including optional price fields when they have values
+    const orderDetails: Record<string, any> = {
+      allOrNone: request.allOrNone || false,
+      priceType: request.priceType,
+      orderTerm: request.orderTerm,
+      marketSession: request.marketSession,
+      Instrument: [
+        {
+          Product: {
+            securityType: 'EQ',
+            symbol: request.symbol,
+          },
+          orderAction: request.orderAction,
+          quantityType: 'QUANTITY',
+          quantity: request.quantity,
+        },
+      ],
+    };
+
+    // Only include price fields if they have values (E*TRADE API is sensitive to undefined/null values)
+    if (request.limitPrice !== undefined && request.limitPrice !== null) {
+      orderDetails.limitPrice = request.limitPrice;
+    }
+    if (request.stopPrice !== undefined && request.stopPrice !== null) {
+      orderDetails.stopPrice = request.stopPrice;
+    }
+
     const orderPayload = {
       orderType: 'EQ',
       clientOrderId: request.clientOrderId,
-      Order: [
-        {
-          allOrNone: request.allOrNone || false,
-          priceType: request.priceType,
-          orderTerm: request.orderTerm,
-          marketSession: request.marketSession,
-          stopPrice: request.stopPrice,
-          limitPrice: request.limitPrice,
-          Instrument: [
-            {
-              Product: {
-                securityType: 'EQ',
-                symbol: request.symbol,
-              },
-              orderAction: request.orderAction,
-              quantityType: 'QUANTITY',
-              quantity: request.quantity,
-            },
-          ],
-        },
-      ],
+      Order: [orderDetails],
     };
 
     let previewResponse;
@@ -124,16 +131,27 @@ export class ETradeClient {
     const placeUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/place`;
     const placeHeaders = this.getAuthHeader(placeUrl, 'POST');
 
-    const placeResponse = await this.httpClient.post(
-      `/v1/accounts/${request.accountIdKey}/orders/place`,
-      {
-        PlaceOrderRequest: {
-          ...orderPayload,
-          PreviewIds: [{ previewId }],
-        },
+    const placePayload = {
+      PlaceOrderRequest: {
+        ...orderPayload,
+        PreviewIds: [{ previewId }],
       },
-      { headers: placeHeaders }
-    );
+    };
+
+    let placeResponse;
+    try {
+      console.log('Place payload:', JSON.stringify(placePayload, null, 2));
+      placeResponse = await this.httpClient.post(
+        `/v1/accounts/${request.accountIdKey}/orders/place`,
+        placePayload,
+        { headers: placeHeaders }
+      );
+    } catch (error: any) {
+      console.error('Place error:', error.response?.status);
+      console.error('Place error data:', JSON.stringify(error.response?.data, null, 2));
+      console.error('Place error message:', error.message);
+      throw error;
+    }
 
     return placeResponse.data.PlaceOrderResponse;
   }
