@@ -8,7 +8,10 @@ import * as path from 'path';
 import 'dotenv/config';
 
 const SANDBOX = process.env.ETRADE_SANDBOX === 'true';
-const BASE_URL = SANDBOX
+// OAuth endpoints always use production URL per E*TRADE documentation
+const OAUTH_URL = 'https://api.etrade.com';
+// API endpoints use sandbox or production based on config
+const API_URL = SANDBOX
   ? 'https://apisb.etrade.com'
   : 'https://api.etrade.com';
 
@@ -46,7 +49,7 @@ function prompt(question: string): Promise<string> {
 }
 
 async function getRequestToken(): Promise<{ token: string; tokenSecret: string }> {
-  const url = `${BASE_URL}/oauth/request_token`;
+  const url = `${OAUTH_URL}/oauth/request_token`;
   const requestData = {
     url,
     method: 'GET',
@@ -85,7 +88,7 @@ async function getAccessToken(
   requestTokenSecret: string,
   verifier: string
 ): Promise<{ accessToken: string; accessTokenSecret: string }> {
-  const url = `${BASE_URL}/oauth/access_token`;
+  const url = `${OAUTH_URL}/oauth/access_token`;
 
   const token = {
     key: requestToken,
@@ -153,7 +156,8 @@ async function main() {
   console.log('E*TRADE OAuth Token Acquisition');
   console.log('=================================');
   console.log(`Mode: ${SANDBOX ? 'SANDBOX' : 'PRODUCTION'}`);
-  console.log(`API URL: ${BASE_URL}`);
+  console.log(`OAuth URL: ${OAUTH_URL}`);
+  console.log(`API URL: ${API_URL}`);
 
   try {
     // Step 1: Get request token
