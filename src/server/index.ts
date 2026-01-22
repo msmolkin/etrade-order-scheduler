@@ -81,6 +81,7 @@ server.listen(port, () => {
   console.log('  GET    /api/auth/start');
   console.log('  GET    /api/auth/callback');
   console.log('  POST   /api/auth/verify');
+  console.log('  POST   /api/auth/auto');
   console.log('  GET    /api/orders');
   console.log('  POST   /api/orders');
   console.log('  GET    /api/orders/:id');

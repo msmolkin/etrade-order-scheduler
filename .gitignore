@@ -9,6 +9,7 @@ build/
 .env
 .env.local
 .env.*.local
+.etrade-cookies.json
 
 # Logs
 logs/
