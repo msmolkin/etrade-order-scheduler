@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { OrderService } from '../services/order-service.js';
 import { ETradeClient } from '../services/etrade-client.js';
+import { OrderExecutor } from '../services/order-executor.js';
 import type { Order } from '../../shared/types/index.js';
 
 const router = Router();
@@ -110,6 +111,36 @@ router.post('/:id/resend', async (req, res) => {
     res.status(201).json(newOrder);
   } catch (error: any) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// Submit order immediately to E*TRADE
+router.post('/:id/submit', async (req, res) => {
+  try {
+    const order = await orderService.getOrder(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+
+    // Validate order is in a submittable state
+    if (order.status !== 'PENDING' && order.status !== 'SCHEDULED') {
+      return res.status(400).json({
+        error: `Order is ${order.status}, must be PENDING or SCHEDULED to submit`,
+      });
+    }
+
+    // Execute order immediately using OrderExecutor
+    const client = getETradeClient();
+    const executor = new OrderExecutor(client, orderService);
+    const lockerId = `manual-submit-${Date.now()}`;
+
+    const success = await executor.executeOrder(order, lockerId);
+
+    // Return updated order
+    const updatedOrder = await orderService.getOrder(req.params.id);
+    res.json({ success, order: updatedOrder });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
   }
 });
 

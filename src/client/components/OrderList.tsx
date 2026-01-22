@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { fetchOrders, deleteOrder, type Order } from '../utils/api';
+import { fetchOrders, deleteOrder, submitOrder, type Order } from '../utils/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 export default function OrderList() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
+  const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'scheduled' | 'pending' | 'submitted'>('all');
   const { isConnected, lastMessage } = useWebSocket('ws://localhost:3001/ws');
 
@@ -40,6 +41,26 @@ export default function OrderList() {
     } catch (error) {
       console.error('Failed to delete order:', error);
       alert('Failed to delete order');
+    }
+  };
+
+  const handleSubmit = async (orderId: string) => {
+    if (!confirm('Submit this order to E*TRADE now?')) return;
+
+    try {
+      setSubmittingId(orderId);
+      const result = await submitOrder(orderId);
+      if (result.success) {
+        alert(`Order submitted successfully!\nE*TRADE Order ID: ${result.order.etradeOrderId || 'Pending'}`);
+      } else {
+        alert(`Order submission failed: ${result.order.lastError || 'Unknown error'}`);
+      }
+      loadOrders();
+    } catch (error: any) {
+      console.error('Failed to submit order:', error);
+      alert(`Failed to submit order: ${error.message}`);
+    } finally {
+      setSubmittingId(null);
     }
   };
 
@@ -162,12 +183,23 @@ export default function OrderList() {
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={() => handleDelete(order.id)}
-                  className="ml-4 px-3 py-1 text-sm bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors"
-                >
-                  Delete
-                </button>
+                <div className="ml-4 flex flex-col gap-2">
+                  {(order.status === 'PENDING' || order.status === 'SCHEDULED') && (
+                    <button
+                      onClick={() => handleSubmit(order.id)}
+                      disabled={submittingId === order.id}
+                      className="px-3 py-1 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded transition-colors"
+                    >
+                      {submittingId === order.id ? 'Submitting...' : 'Submit Now'}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => handleDelete(order.id)}
+                    className="px-3 py-1 text-sm bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors"
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             </div>
           ))}

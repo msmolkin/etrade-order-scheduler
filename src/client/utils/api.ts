@@ -80,6 +80,18 @@ export async function deleteOrder(orderId: string): Promise<void> {
   if (!response.ok) throw new Error('Failed to delete order');
 }
 
+export async function submitOrder(orderId: string): Promise<{ success: boolean; order: Order }> {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to submit order');
+  }
+  return response.json();
+}
+
 export async function fetchOptionsChain(
   symbol: string,
   expirationDate?: string

@@ -14,6 +14,7 @@
     "start": "node dist/server/index.js",
     "scheduler:local": "tsx src/scheduler/local-scheduler.ts",
     "db:migrate": "tsx src/server/database/migrate.ts",
+    "oauth": "tsx src/scripts/oauth-flow.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
