@@ -36,3 +36,15 @@ Thumbs.db
 # AWS
 .aws-sam/
 lambda.zip
+
+# Reference documentation (not part of source)
+etrade-developer-examples/
+etrade-documentation/
+
+# Compiled TypeScript in src/
+src/**/*.js
+src/**/*.d.ts
+src/**/*.js.map
+
+# Claude Code settings
+.claude/
