@@ -25,6 +25,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@tailwindcss/postcss": "^4.1.18",
     "axios": "^1.13.2",
     "cors": "^2.8.5",
     "date-fns": "^4.1.0",
