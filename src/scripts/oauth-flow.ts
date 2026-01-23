@@ -67,14 +67,30 @@ async function getRequestToken(): Promise<{ token: string; tokenSecret: string }
   const authHeader = oauth.toHeader(authData);
 
   console.log('\n1. Requesting OAuth token...');
+  console.log('\n┌─────────────────────────────────────────────────────────────┐');
+  console.log('│  REQUEST: GET /oauth/request_token                          │');
+  console.log('└─────────────────────────────────────────────────────────────┘');
+  console.log(`URL: ${url}?oauth_callback=oob`);
+  console.log('\nREQUEST HEADERS:');
+  const requestHeaders = {
+    ...authHeader,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+  console.log(JSON.stringify(requestHeaders, null, 2));
 
   const response = await axios.get(url, {
-    headers: {
-      ...authHeader,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
+    headers: requestHeaders,
     params: { oauth_callback: 'oob' },
   });
+
+  console.log('\n┌─────────────────────────────────────────────────────────────┐');
+  console.log('│  RESPONSE: /oauth/request_token                             │');
+  console.log('└─────────────────────────────────────────────────────────────┘');
+  console.log(`STATUS: ${response.status} ${response.statusText}`);
+  console.log('\nRESPONSE HEADERS:');
+  console.log(JSON.stringify(response.headers, null, 2));
+  console.log('\nRESPONSE BODY:');
+  console.log(response.data);
 
   const params = new URLSearchParams(response.data);
   const token = params.get('oauth_token');
@@ -88,7 +104,21 @@ async function getRequestToken(): Promise<{ token: string; tokenSecret: string }
 }
 
 function getAuthorizationUrl(requestToken: string): string {
-  return `https://us.etrade.com/e/t/etws/authorize?key=${CONSUMER_KEY}&token=${requestToken}`;
+  const authUrl = `https://us.etrade.com/e/t/etws/authorize?key=${CONSUMER_KEY}&token=${requestToken}`;
+  
+  console.log('\n┌─────────────────────────────────────────────────────────────┐');
+  console.log('│  REQUEST: GET /e/t/etws/authorize (Browser Redirect)        │');
+  console.log('└─────────────────────────────────────────────────────────────┘');
+  console.log(`URL: ${authUrl}`);
+  console.log('\nQUERY PARAMETERS:');
+  console.log(JSON.stringify({
+    key: CONSUMER_KEY,
+    token: requestToken,
+  }, null, 2));
+  console.log('\nNOTE: This is a browser redirect. User authenticates on E*TRADE\'s site.');
+  console.log('RESPONSE: After login, E*TRADE displays a verification code to the user.');
+  
+  return authUrl;
 }
 
 async function getAccessToken(
@@ -110,16 +140,32 @@ async function getAccessToken(
   const authHeader = oauth.toHeader(authData);
 
   console.log('\n4. Exchanging verifier for access token...');
+  console.log('\n┌─────────────────────────────────────────────────────────────┐');
+  console.log('│  REQUEST: GET /oauth/access_token                           │');
+  console.log('└─────────────────────────────────────────────────────────────┘');
+  console.log(`URL: ${url}?oauth_verifier=${verifier}`);
+  const requestHeaders = {
+    ...authHeader,
+    'Content-Type': 'application/x-www-form-urlencoded',
+  };
+  console.log('\nREQUEST HEADERS:');
+  console.log(JSON.stringify(requestHeaders, null, 2));
 
   const response = await axios.get(url, {
-    headers: {
-      ...authHeader,
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
+    headers: requestHeaders,
     params: {
       oauth_verifier: verifier,
     },
   });
+
+  console.log('\n┌─────────────────────────────────────────────────────────────┐');
+  console.log('│  RESPONSE: /oauth/access_token                              │');
+  console.log('└─────────────────────────────────────────────────────────────┘');
+  console.log(`STATUS: ${response.status} ${response.statusText}`);
+  console.log('\nRESPONSE HEADERS:');
+  console.log(JSON.stringify(response.headers, null, 2));
+  console.log('\nRESPONSE BODY:');
+  console.log(response.data);
 
   const params = new URLSearchParams(response.data);
   const accessToken = params.get('oauth_token');
@@ -132,28 +178,33 @@ async function getAccessToken(
   return { accessToken, accessTokenSecret };
 }
 
-function updateEnvFile(accessToken: string, accessTokenSecret: string): void {
+function updateEnvFile(accessToken: string, accessTokenSecret: string, isSandbox: boolean): void {
   const envPath = path.join(process.cwd(), '.env');
   let envContent = fs.readFileSync(envPath, 'utf-8');
 
-  // Update or add ETRADE_ACCESS_TOKEN
-  if (envContent.includes('ETRADE_ACCESS_TOKEN=')) {
+  const accessTokenKey = isSandbox ? 'ETRADE_SANDBOX_ACCESS_TOKEN' : 'ETRADE_ACCESS_TOKEN';
+  const accessTokenSecretKey = isSandbox
+    ? 'ETRADE_SANDBOX_ACCESS_TOKEN_SECRET'
+    : 'ETRADE_ACCESS_TOKEN_SECRET';
+
+  // Update or add access token
+  if (envContent.includes(`${accessTokenKey}=`)) {
     envContent = envContent.replace(
-      /ETRADE_ACCESS_TOKEN=.*/,
-      `ETRADE_ACCESS_TOKEN=${accessToken}`
+      new RegExp(`${accessTokenKey}=.*`),
+      `${accessTokenKey}=${accessToken}`
     );
   } else {
-    envContent += `\nETRADE_ACCESS_TOKEN=${accessToken}`;
+    envContent += `\n${accessTokenKey}=${accessToken}`;
   }
 
-  // Update or add ETRADE_ACCESS_TOKEN_SECRET
-  if (envContent.includes('ETRADE_ACCESS_TOKEN_SECRET=')) {
+  // Update or add access token secret
+  if (envContent.includes(`${accessTokenSecretKey}=`)) {
     envContent = envContent.replace(
-      /ETRADE_ACCESS_TOKEN_SECRET=.*/,
-      `ETRADE_ACCESS_TOKEN_SECRET=${accessTokenSecret}`
+      new RegExp(`${accessTokenSecretKey}=.*`),
+      `${accessTokenSecretKey}=${accessTokenSecret}`
     );
   } else {
-    envContent += `\nETRADE_ACCESS_TOKEN_SECRET=${accessTokenSecret}`;
+    envContent += `\n${accessTokenSecretKey}=${accessTokenSecret}`;
   }
 
   fs.writeFileSync(envPath, envContent);
@@ -199,13 +250,18 @@ async function main() {
     const shouldSave = await prompt('Save tokens to .env file? (y/n): ');
 
     if (shouldSave.toLowerCase() === 'y') {
-      updateEnvFile(accessToken, accessTokenSecret);
+      updateEnvFile(accessToken, accessTokenSecret, SANDBOX);
       console.log('\n✓ Tokens saved to .env file');
       console.log('\nRestart your server to use the new tokens.');
     } else {
       console.log('\nAdd these to your .env file:\n');
-      console.log(`ETRADE_ACCESS_TOKEN=${accessToken}`);
-      console.log(`ETRADE_ACCESS_TOKEN_SECRET=${accessTokenSecret}`);
+      if (SANDBOX) {
+        console.log(`ETRADE_SANDBOX_ACCESS_TOKEN=${accessToken}`);
+        console.log(`ETRADE_SANDBOX_ACCESS_TOKEN_SECRET=${accessTokenSecret}`);
+      } else {
+        console.log(`ETRADE_ACCESS_TOKEN=${accessToken}`);
+        console.log(`ETRADE_ACCESS_TOKEN_SECRET=${accessTokenSecret}`);
+      }
     }
 
     console.log('\n=================================');
