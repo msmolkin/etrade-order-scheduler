@@ -1,9 +1,20 @@
 import { ETradeClient } from '../server/services/etrade-client.js';
 import type { ETradeCredentials } from '../shared/types/index.js';
 import dotenv from 'dotenv';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Load environment variables
 dotenv.config();
+
+interface AccountNickname {
+  nickname: string;
+  accountIdKey: string;
+  accountId: string;
+  accountName: string;
+  accountType: string;
+  accountStatus: string;
+}
 
 function log(step: string, message: string, data?: any) {
   const timestamp = new Date().toISOString();
@@ -11,6 +22,17 @@ function log(step: string, message: string, data?: any) {
   if (data !== undefined) {
     console.log(JSON.stringify(data, null, 2));
   }
+}
+
+function getAccountKeyByNickname(nickname: string): AccountNickname | null {
+  const nicknamesPath = path.join(process.cwd(), '.account-nicknames.json');
+  
+  if (!fs.existsSync(nicknamesPath)) {
+    return null;
+  }
+
+  const nicknames: AccountNickname[] = JSON.parse(fs.readFileSync(nicknamesPath, 'utf-8'));
+  return nicknames.find(n => n.nickname === nickname) || null;
 }
 
 async function buyApple() {
@@ -70,30 +92,82 @@ async function buyApple() {
 
   try {
     // Step 4: Get account information
-    log('STEP 4', 'Fetching account list from E*TRADE...');
-    log('STEP 4', `Making GET request to ${baseUrl}/v1/accounts/list`);
-    
-    const accounts = await client.getAccounts();
-    
-    if (!accounts || accounts.length === 0) {
-      log('ERROR', 'No accounts found');
-      process.exit(1);
+    const accountNickname = process.env.ACCOUNT;
+    let accountIdKey: string;
+    let accountName: string;
+
+    if (accountNickname) {
+      // Use nickname from ACCOUNT env var
+      log('STEP 4', `Looking up account by nickname: ${accountNickname}`);
+      const savedAccount = getAccountKeyByNickname(accountNickname);
+      
+      if (savedAccount) {
+        if (savedAccount.accountStatus !== 'ACTIVE') {
+          log('ERROR', `Account ${accountNickname} is not active (status: ${savedAccount.accountStatus})`);
+          process.exit(1);
+        }
+        accountIdKey = savedAccount.accountIdKey;
+        accountName = `${savedAccount.accountName} (${savedAccount.nickname})`;
+        log('STEP 4', `Found account from saved nicknames ✓`);
+        log('STEP 4', `Account: ${accountName}`);
+        log('STEP 4', `Account ID Key: ${accountIdKey}`);
+      } else {
+        // Nickname not in cache, fetch from API and find by last 4 digits
+        log('STEP 4', 'Nickname not cached, fetching from E*TRADE...');
+        log('STEP 4', `Making GET request to ${baseUrl}/v1/accounts/list`);
+        
+        const accounts = await client.getAccounts();
+        const matchingAccount = accounts.find((acc: any) => acc.accountId.endsWith(accountNickname));
+        
+        if (!matchingAccount) {
+          log('ERROR', `No account found ending with "${accountNickname}"`);
+          log('ERROR', 'Available accounts:');
+          accounts.forEach((acc: any) => {
+            console.log(`  - ${acc.accountId.slice(-4)}: ${acc.accountDesc}`);
+          });
+          process.exit(1);
+        }
+        
+        if (matchingAccount.accountStatus !== 'ACTIVE') {
+          log('ERROR', `Account ${accountNickname} is not active (status: ${matchingAccount.accountStatus})`);
+          process.exit(1);
+        }
+        
+        accountIdKey = matchingAccount.accountIdKey;
+        accountName = `${matchingAccount.accountDesc || matchingAccount.accountName} (${accountNickname})`;
+        log('STEP 4', `Found account: ${accountName} ✓`);
+      }
+    } else {
+      // No nickname specified, fetch and use first active account
+      log('STEP 4', 'No ACCOUNT specified, fetching account list from E*TRADE...');
+      log('STEP 4', `Making GET request to ${baseUrl}/v1/accounts/list`);
+      
+      const accounts = await client.getAccounts();
+      
+      if (!accounts || accounts.length === 0) {
+        log('ERROR', 'No accounts found');
+        process.exit(1);
+      }
+
+      log('STEP 4', `Found ${accounts.length} account(s):`);
+      accounts.forEach((account: any, index: number) => {
+        const nickname = account.accountId.slice(-4);
+        console.log(`  [${index}] ${nickname}: ${account.accountName || account.accountDesc} (${account.accountType}) - ${account.accountStatus}`);
+      });
+
+      // Use the first active account
+      const activeAccount = accounts.find((acc: any) => acc.accountStatus === 'ACTIVE');
+      if (!activeAccount) {
+        log('ERROR', 'No active accounts found');
+        process.exit(1);
+      }
+
+      accountIdKey = activeAccount.accountIdKey;
+      accountName = `${activeAccount.accountName || activeAccount.accountDesc} (${activeAccount.accountId.slice(-4)})`;
+      log('STEP 4', `Selected account: ${accountName}`);
+      log('STEP 4', 'TIP: Use ACCOUNT=XXXX to specify an account by last 4 digits');
     }
-
-    log('STEP 4', `Found ${accounts.length} account(s):`);
-    accounts.forEach((account, index) => {
-      console.log(`  [${index}] ${account.accountName || account.accountDesc} (${account.accountType}) - ${account.accountStatus}`);
-    });
-
-    // Use the first active account
-    const activeAccount = accounts.find(acc => acc.accountStatus === 'ACTIVE');
-    if (!activeAccount) {
-      log('ERROR', 'No active accounts found');
-      process.exit(1);
-    }
-
-    const accountIdKey = activeAccount.accountIdKey;
-    log('STEP 4', `Selected account: ${activeAccount.accountName || activeAccount.accountDesc}`);
+    
     log('STEP 4', `Account ID Key: ${accountIdKey} ✓`);
 
     // Step 5: Build the order request
