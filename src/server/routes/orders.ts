@@ -9,14 +9,30 @@ const orderService = new OrderService();
 
 // Create E*TRADE client (will be initialized with OAuth tokens from session)
 function getETradeClient(): ETradeClient {
+  const isSandbox = process.env.ETRADE_SANDBOX === 'true';
+
+  // Use sandbox-specific keys and tokens when in sandbox mode
+  const consumerKey = isSandbox
+    ? process.env.ETRADE_SANDBOX_KEY!
+    : process.env.ETRADE_CONSUMER_KEY!;
+  const consumerSecret = isSandbox
+    ? process.env.ETRADE_SANDBOX_SECRET!
+    : process.env.ETRADE_CONSUMER_SECRET!;
+  const accessToken = isSandbox
+    ? process.env.ETRADE_SANDBOX_ACCESS_TOKEN
+    : process.env.ETRADE_ACCESS_TOKEN;
+  const accessTokenSecret = isSandbox
+    ? process.env.ETRADE_SANDBOX_ACCESS_TOKEN_SECRET
+    : process.env.ETRADE_ACCESS_TOKEN_SECRET;
+
   return new ETradeClient(
     {
-      consumerKey: process.env.ETRADE_CONSUMER_KEY!,
-      consumerSecret: process.env.ETRADE_CONSUMER_SECRET!,
-      accessToken: process.env.ETRADE_ACCESS_TOKEN,
-      accessTokenSecret: process.env.ETRADE_ACCESS_TOKEN_SECRET,
+      consumerKey,
+      consumerSecret,
+      accessToken,
+      accessTokenSecret,
     },
-    process.env.ETRADE_SANDBOX === 'true'
+    isSandbox
   );
 }
 

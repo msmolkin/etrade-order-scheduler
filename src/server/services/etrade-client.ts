@@ -78,6 +78,7 @@ export class ETradeClient {
     const previewHeaders = this.getAuthHeader(previewUrl, 'POST');
 
     // Build order details, only including optional price fields when they have values
+    const securityType = request.securityType || 'EQ'; // Default to EQ for backward compatibility
     const orderDetails: Record<string, any> = {
       allOrNone: request.allOrNone || false,
       priceType: request.priceType,
@@ -86,7 +87,7 @@ export class ETradeClient {
       Instrument: [
         {
           Product: {
-            securityType: 'EQ',
+            securityType: securityType,
             symbol: request.symbol,
           },
           orderAction: request.orderAction,
@@ -105,7 +106,7 @@ export class ETradeClient {
     }
 
     const orderPayload = {
-      orderType: 'EQ',
+      orderType: securityType,
       clientOrderId: request.clientOrderId,
       Order: [orderDetails],
     };

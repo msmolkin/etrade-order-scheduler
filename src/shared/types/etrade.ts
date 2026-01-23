@@ -20,6 +20,7 @@ export interface ETradeAccount {
 export interface ETradeOrderRequest {
   accountIdKey: string;
   symbol: string;
+  securityType?: 'EQ' | 'OPTN'; // EQ for equities, OPTN for options
   orderAction: 'BUY' | 'SELL' | 'BUY_TO_COVER' | 'SELL_SHORT';
   clientOrderId: string;
   priceType: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT';
