@@ -200,6 +200,101 @@ export class ETradeClient {
     return placeResponse.data.PlaceOrderResponse;
   }
 
+  /**
+   * Attempts to place an order directly without preview (experimental).
+   * E*TRADE API typically requires preview first, but this method tests if direct placement works.
+   */
+  async placeOrderDirect(request: ETradeOrderRequest): Promise<ETradeOrderResponse> {
+    const placeUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/place`;
+    const placeHeaders = this.getAuthHeader(placeUrl, 'POST');
+
+    const securityType = request.securityType || 'EQ';
+    const orderDetails: Record<string, any> = {
+      allOrNone: request.allOrNone || false,
+      priceType: request.priceType,
+      orderTerm: request.orderTerm,
+      marketSession: request.marketSession,
+      Instrument: [
+        {
+          Product: {
+            securityType: securityType,
+            symbol: request.symbol,
+          },
+          orderAction: request.orderAction,
+          quantityType: 'QUANTITY',
+          quantity: request.quantity,
+        },
+      ],
+    };
+
+    if (request.limitPrice !== undefined && request.limitPrice !== null) {
+      orderDetails.limitPrice = request.limitPrice;
+    }
+    if (request.stopPrice !== undefined && request.stopPrice !== null) {
+      orderDetails.stopPrice = request.stopPrice;
+    }
+
+    const placePayload = {
+      PlaceOrderRequest: {
+        orderType: securityType,
+        clientOrderId: request.clientOrderId,
+        Order: [orderDetails],
+        // Try without PreviewIds to see if it works
+      },
+    };
+
+    console.log('\n┌─────────────────────────────────────────────────────────────┐');
+    console.log('│  DIRECT ORDER PLACEMENT (NO PREVIEW)                        │');
+    console.log('└─────────────────────────────────────────────────────────────┘');
+    console.log('1) API URL:');
+    console.log(`   ${placeUrl}`);
+    console.log('\n2) Request Headers:');
+    console.log(JSON.stringify(placeHeaders, null, 2));
+    console.log('\n3) Request Body:');
+    console.log(JSON.stringify(placePayload, null, 2));
+
+    try {
+      const placeResponse = await this.httpClient.post(
+        `/v1/accounts/${request.accountIdKey}/orders/place`,
+        placePayload,
+        { headers: placeHeaders }
+      );
+
+      console.log('\n┌─────────────────────────────────────────────────────────────┐');
+      console.log('│  DIRECT ORDER PLACEMENT RESPONSE                           │');
+      console.log('└─────────────────────────────────────────────────────────────┘');
+      console.log('4) Response Headers:');
+      const responseHeaders = placeResponse.headers || {};
+      console.log(JSON.stringify(responseHeaders, null, 2));
+      if (responseHeaders['x-et-trace']) {
+        console.log(`\nX-ET-Trace: ${responseHeaders['x-et-trace']}`);
+      }
+      console.log('\n5) Response Body:');
+      console.log(JSON.stringify(placeResponse.data, null, 2));
+
+      return placeResponse.data.PlaceOrderResponse;
+    } catch (error: any) {
+      console.log('\n┌─────────────────────────────────────────────────────────────┐');
+      console.log('│  DIRECT ORDER PLACEMENT ERROR                              │');
+      console.log('└─────────────────────────────────────────────────────────────┘');
+      
+      if (error.response) {
+        console.log('4) Response Status:', error.response.status);
+        console.log('5) Response Headers:');
+        const errorResponseHeaders = error.response.headers || {};
+        console.log(JSON.stringify(errorResponseHeaders, null, 2));
+        if (errorResponseHeaders['x-et-trace']) {
+          console.log(`\nX-ET-Trace: ${errorResponseHeaders['x-et-trace']}`);
+        }
+        console.log('\n6) Response Body:');
+        console.log(JSON.stringify(error.response.data, null, 2));
+      } else {
+        console.log('4) Error (no response):', error.message);
+      }
+      throw error;
+    }
+  }
+
   async getOrderStatus(accountIdKey: string, orderId: string): Promise<ETradeOrderResponse> {
     const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/orders/${orderId}`;
     const headers = this.getAuthHeader(url);

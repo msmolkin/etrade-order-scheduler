@@ -201,17 +201,24 @@ async function buyApple() {
     log('STEP 5', 'Order request built ✓');
     log('STEP 5', 'Full order request:', orderRequest);
 
-    // Step 6: Preview the order
-    log('STEP 6', 'Submitting order preview to E*TRADE...');
-    log('STEP 6', `Making POST request to ${baseUrl}/v1/accounts/${accountIdKey}/orders/preview`);
-
-    // Step 7: Place the order (preview + place happens inside placeOrder)
-    log('STEP 7', 'Placing order (this will preview first, then place)...');
+    // Step 6: Place the order
+    const skipPreview = process.env.SKIP_PREVIEW === 'true';
     
-    const response = await client.placeOrder(orderRequest);
+    if (skipPreview) {
+      log('STEP 6', 'Attempting direct order placement (skipping preview)...');
+      log('STEP 6', `Making POST request to ${baseUrl}/v1/accounts/${accountIdKey}/orders/place`);
+    } else {
+      log('STEP 6', 'Submitting order preview to E*TRADE...');
+      log('STEP 6', `Making POST request to ${baseUrl}/v1/accounts/${accountIdKey}/orders/preview`);
+      log('STEP 7', 'Placing order (this will preview first, then place)...');
+    }
+    
+    const response = skipPreview 
+      ? await client.placeOrderDirect(orderRequest)
+      : await client.placeOrder(orderRequest);
 
-    // Step 8: Order complete
-    log('STEP 8', 'Order placement response received');
+    // Step 7: Order complete
+    log('STEP 7', 'Order placement response received');
     
     console.log('\n╔════════════════════════════════════════════════════════════╗');
     console.log('║              ORDER SUCCESSFULLY PLACED                     ║');
