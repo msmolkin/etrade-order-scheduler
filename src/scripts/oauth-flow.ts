@@ -247,9 +247,9 @@ async function main() {
     console.log('\n✓ Successfully obtained access tokens!\n');
 
     // Step 5: Save to .env or display
-    const shouldSave = await prompt('Save tokens to .env file? (y/n): ');
+    const shouldSave = await prompt('Save tokens to .env file? (Y/n): ');
 
-    if (shouldSave.toLowerCase() === 'y') {
+    if (shouldSave.toLowerCase() === 'y' || shouldSave.toLowerCase() === '') {
       updateEnvFile(accessToken, accessTokenSecret, SANDBOX);
       console.log('\n✓ Tokens saved to .env file');
       console.log('\nRestart your server to use the new tokens.');

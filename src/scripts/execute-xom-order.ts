@@ -91,11 +91,11 @@ async function executeXomOrder() {
     // Step 2: Build the option order
     console.log('Step 2: Building XOM call option order...');
     
-    const optionSymbol = buildOptionSymbol('XOM', '260123', 'C', 135);
+    const optionSymbol = buildOptionSymbol('XOM', '260130', 'C', 140);
     console.log(`  Underlying: XOM`);
     console.log(`  Option Type: CALL`);
-    console.log(`  Strike Price: $135`);
-    console.log(`  Expiration: January 23, 2026`);
+    console.log(`  Strike Price: $140`);
+    console.log(`  Expiration: January 30, 2026`);
     console.log(`  Option Symbol: ${optionSymbol}`);
     console.log(`  Action: SELL`);
     console.log(`  Quantity: 1 contract`);
