@@ -89,6 +89,9 @@ async function getRequestToken(): Promise<{ token: string; tokenSecret: string }
   console.log(`STATUS: ${response.status} ${response.statusText}`);
   console.log('\nRESPONSE HEADERS:');
   console.log(JSON.stringify(response.headers, null, 2));
+  if (response.headers['x-et-trace']) {
+    console.log(`\nX-ET-Trace: ${response.headers['x-et-trace']}`);
+  }
   console.log('\nRESPONSE BODY:');
   console.log(response.data);
 
@@ -164,6 +167,9 @@ async function getAccessToken(
   console.log(`STATUS: ${response.status} ${response.statusText}`);
   console.log('\nRESPONSE HEADERS:');
   console.log(JSON.stringify(response.headers, null, 2));
+  if (response.headers['x-et-trace']) {
+    console.log(`\nX-ET-Trace: ${response.headers['x-et-trace']}`);
+  }
   console.log('\nRESPONSE BODY:');
   console.log(response.data);
 
