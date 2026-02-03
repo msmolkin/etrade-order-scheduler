@@ -83,12 +83,20 @@ async function executeXomOrder() {
       console.error('ERROR: No active accounts found');
       process.exit(1);
     }
-    const matchingAccount = accountNickname
-      ? activeAccounts.find((acc: any) => acc.accountId.endsWith(accountNickname))
-      : activeAccounts.find((acc: any) => acc.accountId.endsWith('[REDACTED]'));
+    let matchingAccount: any;
+    if (accountNickname) {
+      matchingAccount = activeAccounts.find((acc: any) => String(acc.accountId).endsWith(String(accountNickname)));
+      if (matchingAccount) {
+        console.log(`Found account matching ACCOUNT env var '${accountNickname}': ${matchingAccount.accountId}`);
+      } else {
+        console.log(`WARNING: No account found ending with '${accountNickname}', using first active account`);
+        console.log(`Available account IDs: ${activeAccounts.map((a: any) => a.accountId).join(', ')}`);
+      }
+    }
     const activeAccount = matchingAccount ?? activeAccounts[0];
     const accountIdKey = activeAccount.accountIdKey;
-    console.log(`Using account: ${activeAccount.accountName || activeAccount.accountDesc}`);
+    console.log(`\nUsing account: ${activeAccount.accountName || activeAccount.accountDesc}`);
+    console.log(`Account ID: ${activeAccount.accountId}`);
     console.log(`Account Key: ${accountIdKey}\n`);
 
     // Step 2: Get valid expiry dates from E*TRADE, then resolve $145 Call (per E*TRADE doc)
