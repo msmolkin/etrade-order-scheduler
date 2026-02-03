@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { createOrder, fetchAccounts, type TradingAccount } from '../utils/api';
+import { createOrder, fetchAccounts, fetchQuote, type TradingAccount } from '../utils/api';
 
 type OrderFormDraft = Partial<{
   symbol: string;
@@ -55,6 +55,8 @@ export default function OrderForm({ draft }: OrderFormProps) {
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [accountsError, setAccountsError] = useState('');
+  const [autoPricing, setAutoPricing] = useState(false);
+  const [autoPricingError, setAutoPricingError] = useState('');
 
   useEffect(() => {
     const loadAccounts = async () => {
@@ -105,6 +107,66 @@ export default function OrderForm({ draft }: OrderFormProps) {
       notes: draft.notes ?? prev.notes,
     }));
   }, [draft]);
+
+  // When using LIMIT orders, automatically set limit price to current bid/ask.
+  useEffect(() => {
+    const shouldAutoPrice =
+      formData.orderType === 'LIMIT' &&
+      !!formData.symbol &&
+      (formData.action === 'BUY' ||
+        formData.action === 'SELL' ||
+        formData.action === 'BUY_TO_COVER' ||
+        formData.action === 'SELL_SHORT');
+
+    if (!shouldAutoPrice) {
+      setAutoPricing(false);
+      return;
+    }
+
+    let cancelled = false;
+    setAutoPricing(true);
+    setAutoPricingError('');
+
+    const loadQuote = async () => {
+      try {
+        const quotes = await fetchQuote([formData.symbol]);
+        const quote = Array.isArray(quotes) ? quotes[0] : quotes;
+        if (!quote || cancelled) return;
+
+        const bid = typeof quote.bid === 'number' ? quote.bid : undefined;
+        const ask = typeof quote.ask === 'number' ? quote.ask : undefined;
+
+        let nextLimit: number | undefined;
+        if (formData.action === 'BUY' || formData.action === 'BUY_TO_COVER') {
+          nextLimit = ask ?? bid;
+        } else if (formData.action === 'SELL' || formData.action === 'SELL_SHORT') {
+          nextLimit = bid ?? ask;
+        }
+
+        if (nextLimit && !cancelled) {
+          setFormData((prev) => ({
+            ...prev,
+            limitPrice: nextLimit.toFixed(2),
+          }));
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          setAutoPricingError(err.message || 'Failed to fetch live price for limit order');
+        }
+      } finally {
+        if (!cancelled) {
+          setAutoPricing(false);
+        }
+      }
+    };
+
+    loadQuote();
+
+    return () => {
+      cancelled = true;
+    };
+    // Re-run when symbol, orderType, or action changes
+  }, [formData.symbol, formData.orderType, formData.action]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -159,6 +221,12 @@ export default function OrderForm({ draft }: OrderFormProps) {
       {accountsError && (
         <div className="mb-4 p-4 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-200 text-sm">
           {accountsError}. You can still enter an Account ID manually below.
+        </div>
+      )}
+
+      {autoPricingError && (
+        <div className="mb-4 p-4 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-100 text-xs">
+          {autoPricingError}
         </div>
       )}
 
@@ -278,9 +346,14 @@ export default function OrderForm({ draft }: OrderFormProps) {
 
           {(formData.orderType === 'LIMIT' || formData.orderType === 'STOP_LIMIT') && (
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Limit Price
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-slate-300">
+                  Limit Price
+                </label>
+                {autoPricing && (
+                  <span className="text-xs text-slate-400">Syncing with market...</span>
+                )}
+              </div>
               <input
                 type="number"
                 step="0.01"
