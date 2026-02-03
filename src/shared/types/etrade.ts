@@ -37,6 +37,8 @@ export interface ETradeOrderRequest {
   expiryMonth?: number;
   expiryDay?: number;
   strikePrice?: number;
+  /** Optional: use productId from option chain (symbol = osiKey, typeCode = 'OPTION') per E*TRADE doc */
+  productId?: { symbol: string; typeCode: string };
 }
 
 export interface ETradeOrderResponse {

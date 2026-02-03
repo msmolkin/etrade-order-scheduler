@@ -79,18 +79,19 @@ export class ETradeClient {
 
     // Build order details, only including optional price fields when they have values
     const securityType = request.securityType || 'EQ'; // Default to EQ for backward compatibility
-    // E*TRADE doc: OPTN Product = underlying symbol + callPut + expiryYear/Month/Day + strikePrice.
-    // Use zero-padded expiry month/day strings to match doc (e.g. "01", "30").
+    // E*TRADE doc: OPTN Product = symbol + callPut + expiry (int) + strikePrice; or productId (osiKey from option chain).
+    // When productId is provided (from Get Option Chains osiKey), use it per Product definition.
     const optnProduct: Record<string, any> =
       securityType === 'OPTN'
         ? {
             securityType: 'OPTN',
             symbol: request.symbol,
+            ...(request.productId && { productId: request.productId }),
             ...(request.callPut && { callPut: request.callPut }),
             ...(request.expiryYear != null && {
               expiryYear: request.expiryYear,
-              expiryMonth: String(request.expiryMonth!).padStart(2, '0'),
-              expiryDay: String(request.expiryDay!).padStart(2, '0'),
+              expiryMonth: request.expiryMonth,
+              expiryDay: request.expiryDay,
               ...(request.strikePrice != null && { strikePrice: request.strikePrice }),
             }),
           }
@@ -372,6 +373,62 @@ export class ETradeClient {
       calls: chainData.OptionPair?.map((pair: any) => this.transformOptionContract(pair.Call, 'CALL')).filter(Boolean) || [],
       puts: chainData.OptionPair?.map((pair: any) => this.transformOptionContract(pair.Put, 'PUT')).filter(Boolean) || [],
     };
+  }
+
+  /**
+   * Get valid option expiry dates for a symbol (per E*TRADE Market API).
+   * Returns array of { year, month, day } sorted by date.
+   */
+  async getOptionExpireDates(symbol: string): Promise<{ year: number; month: number; day: number }[]> {
+    const url = `${this.baseUrl}/v1/market/optionexpiredate?symbol=${symbol}`;
+    const headers = this.getAuthHeader(url);
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers });
+    const data = response.data?.OptionExpireDateResponse || response.data?.optionExpireDateResponse;
+    const dates = data?.ExpirationDate ?? data?.expirationDates ?? [];
+    const list = Array.isArray(dates) ? dates : [dates];
+    return list
+      .map((d: any) => ({
+        year: Number(d.year ?? d.Year),
+        month: Number(d.month ?? d.Month),
+        day: Number(d.day ?? d.Day),
+      }))
+      .filter((d: any) => !isNaN(d.year) && !isNaN(d.month) && !isNaN(d.day))
+      .sort((a: any, b: any) => {
+        const da = new Date(a.year, a.month - 1, a.day).getTime();
+        const db = new Date(b.year, b.month - 1, b.day).getTime();
+        return da - db;
+      });
+  }
+
+  /**
+   * Fetch option chain for a specific expiry and strike (per E*TRADE Market API).
+   * Returns the osiKey for the call/put at the given strike, or null if not found.
+   * Use getOptionExpireDates() to get valid expiry dates first.
+   */
+  async getOptionOsiKey(
+    symbol: string,
+    expiryYear: number,
+    expiryMonth: number,
+    expiryDay: number,
+    callPut: 'CALL' | 'PUT',
+    strikePrice: number
+  ): Promise<string | null> {
+    const monthStr = String(expiryMonth).padStart(2, '0');
+    const url = `${this.baseUrl}/v1/market/optionchains?symbol=${symbol}&expiryYear=${expiryYear}&expiryMonth=${monthStr}&expiryDay=${expiryDay}&strikePriceNear=${strikePrice}&noOfStrikes=3`;
+    const headers = this.getAuthHeader(url);
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers });
+    const chain = response.data?.OptionChainResponse || response.data?.optionChainResponse;
+    const pairs = chain?.OptionPair || chain?.optionPairs || [];
+    for (const pair of pairs) {
+      const leg = callPut === 'CALL' ? (pair.Call || pair.call) : (pair.Put || pair.put);
+      if (!leg) continue;
+      const strike = leg.strikePrice ?? leg.StrikePrice;
+      if (strike != null && Math.round(Number(strike)) === Math.round(strikePrice)) {
+        const osiKey = leg.osiKey ?? leg.OsiKey;
+        if (osiKey) return osiKey;
+      }
+    }
+    return null;
   }
 
   private transformOptionContract(contract: any, type: 'CALL' | 'PUT'): any {

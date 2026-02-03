@@ -91,29 +91,50 @@ async function executeXomOrder() {
     console.log(`Using account: ${activeAccount.accountName || activeAccount.accountDesc}`);
     console.log(`Account Key: ${accountIdKey}\n`);
 
-    // Step 2: Build the option order
-    console.log('Step 2: Building XOM call option order...');
-    
-    const optionSymbol = buildOptionSymbol('XOM', '260130', 'C', 140);
+    // Step 2: Get valid expiry dates from E*TRADE, then resolve $145 Call (per E*TRADE doc)
+    console.log('Step 2: Fetching valid XOM option expiry dates...');
+    const expireDates = await client.getOptionExpireDates('XOM');
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const nextExpiry = expireDates.find(
+      (d) => new Date(d.year, d.month - 1, d.day).getTime() >= today.getTime()
+    );
+    if (!nextExpiry) {
+      console.error('ERROR: No future option expiry dates found for XOM');
+      process.exit(1);
+    }
+    const { year: expiryYear, month: expiryMonth, day: expiryDay } = nextExpiry;
+    const expiryYYMMDD = `${String(expiryYear).slice(2)}${String(expiryMonth).padStart(2, '0')}${String(expiryDay).padStart(2, '0')}`;
+    const expiryLabel = new Date(expiryYear, expiryMonth - 1, expiryDay).toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    console.log(`  Using next expiry: ${expiryLabel}\n`);
+    console.log('  Resolving XOM $145 Call via option chain...');
+    const osiKey = await client.getOptionOsiKey('XOM', expiryYear, expiryMonth, expiryDay, 'CALL', 145);
+    const optionSymbol = buildOptionSymbol('XOM', expiryYYMMDD, 'C', 145);
     console.log(`  Underlying: XOM`);
     console.log(`  Option Type: CALL`);
-    console.log(`  Strike Price: $140`);
-    console.log(`  Expiration: January 30, 2026`);
-    console.log(`  Option Symbol: ${optionSymbol}`);
+    console.log(`  Strike Price: $145`);
+    console.log(`  Expiration: ${expiryLabel}`);
+    console.log(`  Option Symbol (built): ${optionSymbol}`);
+    if (osiKey) console.log(`  OSI Key (from API): ${osiKey}`);
     console.log(`  Action: SELL`);
     console.log(`  Quantity: 1 contract`);
     console.log(`  Limit Price: $55.00 per share\n`);
 
-    // E*TRADE option preview expects underlying symbol + callPut + expiry + strike (not full option symbol).
+    // E*TRADE: use productId (osiKey from option chain) when available; otherwise underlying + expiry + strike.
     const orderRequest = {
       accountIdKey: accountIdKey,
       symbol: 'XOM',
       securityType: 'OPTN' as const,
+      ...(osiKey && { productId: { symbol: osiKey, typeCode: 'OPTION' as const } }),
       callPut: 'CALL' as const,
-      expiryYear: 2026,
-      expiryMonth: 1,
-      expiryDay: 30,
-      strikePrice: 140,
+      expiryYear,
+      expiryMonth,
+      expiryDay,
+      strikePrice: 145,
       orderAction: 'SELL_OPEN' as const,
       priceType: 'LIMIT' as const,
       quantity: 1,
