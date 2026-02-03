@@ -10,6 +10,7 @@ build/
 .env.local
 .env.*.local
 .etrade-cookies.json
+.account-nicknames.json
 
 # Logs
 logs/
@@ -49,3 +50,6 @@ src/**/*.js.map
 
 # Claude Code settings
 .claude/
+
+# API test results
+etrade-documentation/api-test-results/

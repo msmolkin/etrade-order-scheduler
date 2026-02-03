@@ -208,16 +208,24 @@ router.get('/market/options-chain', async (req, res) => {
 });
 
 // Test order placement (debug endpoint)
+// Requires accountIdKey in request body (e.g. from .account-nicknames.json or GET /accounts).
 router.post('/test-place', async (req, res) => {
   try {
+    const { accountIdKey } = req.body;
+    if (!accountIdKey || typeof accountIdKey !== 'string') {
+      return res.status(400).json({
+        error: 'accountIdKey required in request body',
+        hint: 'Get accountIdKey from GET /v1/accounts/list or your account nicknames.',
+      });
+    }
     const client = getETradeClient();
     console.log('Testing order placement from server...');
 
     const result = await client.placeOrder({
-      accountIdKey: '[REDACTED]',
+      accountIdKey,
       symbol: 'AAPL',
       orderAction: 'BUY',
-      clientOrderId: 'test-' + Date.now(),
+      clientOrderId: `tst${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
       priceType: 'LIMIT',
       quantity: 1,
       orderTerm: 'GOOD_FOR_DAY',
