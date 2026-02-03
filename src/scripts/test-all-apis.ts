@@ -276,7 +276,7 @@ const apiTests: ApiTest[] = [
     body: {
       PreviewOrderRequest: {
         orderType: 'EQ',
-        clientOrderId: `test-preview-${Date.now()}`,
+        clientOrderId: `tst${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
         Order: [{
           allOrNone: false,
           priceType: 'LIMIT',

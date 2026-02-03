@@ -121,7 +121,7 @@ export class OrderExecutor {
       accountIdKey: order.accountId,
       symbol: order.symbol,
       orderAction: order.action,
-      clientOrderId: `order-${Date.now()}`,
+      clientOrderId: `ord${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
       priceType: this.mapOrderType(order.orderType),
       quantity: order.quantity,
       orderTerm: this.mapDuration(order.actualDuration),
