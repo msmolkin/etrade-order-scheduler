@@ -1,8 +1,13 @@
 import pg from 'pg';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const { Pool } = pg;
 
 export const pool = new Pool({
@@ -58,5 +63,18 @@ export async function healthCheck(): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** Applies schema.sql (CREATE TABLE IF NOT EXISTS, etc.). Safe to run on every startup. */
+export async function runSchema(): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const schemaPath = path.join(__dirname, 'schema.sql');
+    const schema = fs.readFileSync(schemaPath, 'utf8');
+    await pool.query(schema);
+    return { ok: true };
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    return { ok: false, error: msg };
   }
 }

@@ -4,11 +4,19 @@
 
 ### 1. Install PostgreSQL (if not installed)
 
-**macOS (Homebrew):**
+**macOS (Homebrew):** This project uses **PostgreSQL 14** (`postgresql@14`). If you have both 14 and 16 installed, use 14 for consistency (`brew --prefix postgresql@14` to confirm the path).
 ```bash
 brew install postgresql@14
 brew services start postgresql@14
 ```
+
+**If `brew services start` fails (e.g. error 78 / launchctl Bootstrap failed):** The data directory may not exist yet. Initialize it, then start Postgres directly:
+```bash
+/usr/local/opt/postgresql@14/bin/initdb --locale=C -E UTF-8 /usr/local/var/postgresql@14
+/usr/local/opt/postgresql@14/bin/pg_ctl -D /usr/local/var/postgresql@14 -l /tmp/pg14.log start
+```
+Verify: `pg_isready -h localhost -p 5432` should report "accepting connections".  
+**Note:** If you start Postgres with `pg_ctl` instead of `brew services`, it will not auto-start after reboot; run the `pg_ctl ... start` command again, or fix `brew services` if you want it to start automatically.
 
 **Ubuntu/Debian:**
 ```bash
@@ -38,8 +46,9 @@ nano .env  # or use your preferred editor
 
 **Required settings in `.env`:**
 ```bash
-# Database
-DATABASE_URL=postgresql://etrade_user@localhost:5432/etrade_trader
+# Database — use your macOS username as the DB user (initdb creates this superuser; trust auth = no password for local)
+DATABASE_URL=postgresql://YOUR_MACOS_USERNAME@localhost:5432/etrade_trader
+# Example: postgresql://michael@localhost:5432/etrade_trader
 
 # E*TRADE API (Get from https://developer.etrade.com)
 ETRADE_CONSUMER_KEY=your_consumer_key_here
@@ -55,16 +64,17 @@ NODE_ENV=development
 # ETRADE_ACCESS_TOKEN_SECRET=
 ```
 
-### 4. Run Database Migrations
+### 4. Database schema (migrations)
 
+**What are migrations?** They are versioned changes to the database schema (tables, columns, indexes). This project has a single schema file (`schema.sql`) with `CREATE TABLE IF NOT EXISTS`, so "migration" here means: apply that schema so the `orders` and related tables exist.
+
+**Automatic:** When you start the server (`npm run dev` or `npm run server:dev`), it runs the schema automatically. If PostgreSQL is running and `DATABASE_URL` is set, you’ll see `Database: schema applied (tables ready)`. If not, you’ll see an error and DB operations will fail until you fix it.
+
+**Manual (optional):** To apply the schema without starting the server:
 ```bash
 npm run db:migrate
 ```
-
-You should see:
-```
-✓ Database migration completed successfully
-```
+You should see: `✓ Database migration completed successfully`
 
 ### 5. Get E*TRADE Access Tokens
 
@@ -143,9 +153,10 @@ Click "Active Orders" tab to see your scheduled order.
 
 ## Common Issues
 
-### "Connection refused" error
-- Make sure PostgreSQL is running: `pg_isready`
-- Check DATABASE_URL in .env
+### "Connection refused" or "Database connection refused" error
+- PostgreSQL must be running: `brew services start postgresql@14` (or your install). Verify: `pg_isready -h localhost -p 5432` (or use the port in your DATABASE_URL).
+- **Homebrew postgresql@14** often listens on **port 5433** if another Postgres uses 5432. If connection to 5432 is refused, set `DATABASE_URL=postgresql://user@localhost:5433/etrade_trader` (or your user/db) in `.env`.
+- Check which port Postgres is on: `lsof -i -P | grep postgres` or see `brew services info postgresql@14`.
 
 ### "OAuth token invalid"
 - You need to complete the E*TRADE OAuth flow

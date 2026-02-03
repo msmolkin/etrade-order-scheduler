@@ -9,7 +9,7 @@ import positionsRouter from './routes/positions.js';
 import positionsCushionsRouter from './routes/positions-cushions.js';
 import authRouter from './routes/auth.js';
 import symbolsRouter from './routes/symbols.js';
-import { healthCheck } from './database/client.js';
+import { healthCheck, runSchema } from './database/client.js';
 
 // Capture shell env before .env so "ETRADE_SANDBOX=false npm run dev" always uses production
 const etradeSandboxFromShell = process.env.ETRADE_SANDBOX;
@@ -81,7 +81,7 @@ export function broadcastOrderUpdate(order: any) {
 }
 
 // Start server
-server.listen(port, () => {
+server.listen(port, async () => {
   console.log('\n🚀 E*TRADE Trade Placer Server');
   console.log('================================');
   console.log(`HTTP Server: http://localhost:${port}`);
@@ -93,6 +93,25 @@ server.listen(port, () => {
   );
   if (isSandbox) {
     console.log('  → Using sandbox tokens. For production, set ETRADE_SANDBOX=false in .env or run with ETRADE_SANDBOX=false');
+  }
+  const schemaResult = await runSchema();
+  if (schemaResult.ok) {
+    console.log('  Database: schema applied (tables ready)');
+  } else {
+    const url = process.env.DATABASE_URL;
+    let hostPort = 'host:port';
+    if (url) {
+      try {
+        const u = new URL(url.replace(/^postgresql:\/\//, 'http://'));
+        hostPort = `${u.hostname}:${u.port || '5432'}`;
+      } catch (_) {}
+    }
+    console.log('  Database: schema not applied —', schemaResult.error);
+    console.log('  → DATABASE_URL points to', hostPort + '. Is PostgreSQL running there?');
+    if (hostPort.includes('5432')) {
+      console.log('  → Homebrew postgresql@14 often uses port 5433. Try DATABASE_URL=...localhost:5433/yourdb');
+    }
+    console.log('  → DB operations will fail until fixed.');
   }
   console.log('\nEndpoints:');
   console.log('  GET    /health');

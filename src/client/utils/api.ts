@@ -61,7 +61,10 @@ export async function createOrder(order: Partial<Order>): Promise<Order> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(order),
   });
-  if (!response.ok) throw new Error('Failed to create order');
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error || 'Failed to create order');
+  }
   return response.json();
 }
 

@@ -2,9 +2,27 @@ import { Router } from 'express';
 import { OrderService } from '../services/order-service.js';
 import { ETradeClient } from '../services/etrade-client.js';
 import { OrderExecutor } from '../services/order-executor.js';
-import type { Order } from '../../shared/types/index.js';
+import type { Order, SessionTime } from '../../shared/types/index.js';
 
 const router = Router();
+
+/** Next scheduled time (next trading day) in scheduler timezone: 7:00 for EXTENDED, 9:30 for MARKET. */
+function getNextScheduledTime(sessionTime: SessionTime): Date {
+  const tz = process.env.SCHEDULER_TIMEZONE || 'America/New_York';
+  const next = new Date();
+  next.setUTCDate(next.getUTCDate() + 1);
+  let day = next.getUTCDay();
+  if (day === 0) next.setUTCDate(next.getUTCDate() + 1);
+  else if (day === 6) next.setUTCDate(next.getUTCDate() + 2);
+  const formatter = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' });
+  const parts = formatter.formatToParts(next);
+  const tzName = parts.find((p) => p.type === 'timeZoneName')?.value ?? '';
+  const offsetHours = tzName.includes('EDT') ? 4 : 5;
+  const utcHour = sessionTime === 'EXTENDED' ? 7 + offsetHours : 9 + offsetHours;
+  const utcMin = sessionTime === 'EXTENDED' ? 0 : 30;
+  next.setUTCHours(utcHour, utcMin, 0, 0);
+  return next;
+}
 const orderService = new OrderService();
 
 // Create E*TRADE client (will be initialized with OAuth tokens from session)
@@ -83,9 +101,63 @@ router.get('/:id', async (req, res) => {
 // Create new order
 router.post('/', async (req, res) => {
   try {
-    const orderData = req.body as Omit<Order, 'id' | 'createdAt' | 'updatedAt'>;
+    const raw = req.body as Record<string, unknown>;
+    const required = [
+      'accountId',
+      'symbol',
+      'securityType',
+      'action',
+      'orderType',
+      'quantity',
+      'preferredDuration',
+      'actualDuration',
+      'sessionTime',
+      'scheduleEnabled',
+    ] as const;
+    for (const key of required) {
+      if (raw[key] === undefined || raw[key] === null || raw[key] === '') {
+        return res.status(400).json({
+          error: `Missing or invalid required field: ${key}`,
+        });
+      }
+    }
 
-    // Determine if order requires daily placement
+    const quantity = typeof raw.quantity === 'number' ? raw.quantity : parseInt(String(raw.quantity), 10);
+    if (Number.isNaN(quantity) || quantity < 1) {
+      return res.status(400).json({ error: 'Quantity must be a positive integer' });
+    }
+
+    const orderData: Omit<Order, 'id' | 'createdAt' | 'updatedAt'> = {
+      ...raw,
+      accountId: String(raw.accountId),
+      symbol: String(raw.symbol),
+      securityType: raw.securityType as Order['securityType'],
+      action: raw.action as Order['action'],
+      orderType: raw.orderType as Order['orderType'],
+      quantity,
+      preferredDuration: raw.preferredDuration as Order['preferredDuration'],
+      actualDuration: raw.actualDuration as Order['actualDuration'],
+      sessionTime: raw.sessionTime as SessionTime,
+      scheduleEnabled: Boolean(raw.scheduleEnabled),
+      limitPrice: raw.limitPrice != null && raw.limitPrice !== '' ? Number(raw.limitPrice) : undefined,
+      stopPrice: raw.stopPrice != null && raw.stopPrice !== '' ? Number(raw.stopPrice) : undefined,
+      strikePrice: raw.strikePrice != null && raw.strikePrice !== '' ? Number(raw.strikePrice) : undefined,
+      expirationDate: raw.expirationDate ? new Date(raw.expirationDate as string) : undefined,
+      optionSymbol: raw.optionSymbol != null && raw.optionSymbol !== '' ? String(raw.optionSymbol) : undefined,
+      optionType: raw.optionType as Order['optionType'] | undefined,
+      notes: raw.notes != null && raw.notes !== '' ? String(raw.notes) : undefined,
+    };
+
+    let scheduledFor: Date | undefined;
+    if (raw.scheduledFor != null && String(raw.scheduledFor).trim() !== '') {
+      const parsed = new Date(raw.scheduledFor as string);
+      if (!Number.isNaN(parsed.getTime())) scheduledFor = parsed;
+    }
+    if (orderData.scheduleEnabled && !scheduledFor) {
+      scheduledFor = getNextScheduledTime(orderData.sessionTime);
+    }
+    (orderData as Record<string, unknown>).scheduledFor = scheduledFor;
+
     const requiresDaily = orderData.preferredDuration !== orderData.actualDuration;
 
     const order = await orderService.createOrder({
@@ -93,12 +165,17 @@ router.post('/', async (req, res) => {
       requiresDaily,
       status: orderData.scheduleEnabled ? 'SCHEDULED' : 'PENDING',
       retryCount: 0,
-      maxRetries: orderData.maxRetries || 3,
+      maxRetries: Number(raw.maxRetries) || 3,
     });
 
     res.status(201).json(order);
   } catch (error: any) {
-    res.status(400).json({ error: error.message });
+    console.error('Create order failed:', error);
+    let errMsg = error?.message || error?.code || String(error);
+    if (error?.code === 'ECONNREFUSED' || (typeof errMsg === 'string' && errMsg.includes('ECONNREFUSED'))) {
+      errMsg = 'Database connection refused. Is PostgreSQL running? Check DATABASE_URL in .env.';
+    }
+    res.status(400).json({ error: errMsg || 'Failed to create order' });
   }
 });
 

@@ -5,7 +5,16 @@
       "Bash(node --version:*)",
       "Bash(brew --version:*)",
       "Bash(brew install:*)",
-      "Bash(postgres:*)"
+      "Bash(postgres:*)",
+      "Bash(brew services:*)",
+      "Bash(/usr/local/opt/postgresql@14/bin/initdb:*)",
+      "Bash(launchctl bootout:*)",
+      "Bash(pg_isready:*)",
+      "Bash(createdb:*)",
+      "Bash(psql:*)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)",
+      "Bash(ETRADE_SANDBOX=false npm run dev:*)"
     ]
   }
 }
