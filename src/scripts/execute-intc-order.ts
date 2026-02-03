@@ -225,8 +225,8 @@ async function executeIntcOrder() {
         const previewId = preview?.PreviewIds?.[0]?.previewId;
         console.log(`✓ PREVIEW OK for ${s.orderAction}. previewId=${previewId ?? 'unknown'}`);
       } catch (err: any) {
-        const codeMatch = String(err?.response?.data ?? '').match(/<code>(\\d+)<\\/code>/);
-        const msgMatch = String(err?.response?.data ?? '').match(/<message>([\\s\\S]*?)<\\/message>/);
+        const codeMatch = String(err?.response?.data ?? '').match(/<code>(\d+)<\/code>/);
+        const msgMatch = String(err?.response?.data ?? '').match(/<message>([\s\S]*?)<\/message>/);
         const code = codeMatch?.[1];
         const msg = msgMatch?.[1]?.replace(/&apos;/g, "'")?.trim();
         console.log(`✗ PREVIEW FAILED for ${s.orderAction}${code ? ` (code ${code})` : ''}`);
