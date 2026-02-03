@@ -10,6 +10,7 @@ build/
 .env.local
 .env.*.local
 .etrade-cookies.json
+.oauth_request_token.json
 .account-nicknames.json
 
 # Logs
