@@ -223,8 +223,10 @@ async function executeIntcOrder() {
     }
     console.log('');
 
-    // Step 5: Try multiple order actions via PREVIEW ONLY
-    console.log('Step 4: Previewing multiple option order actions (no placement)...\n');
+    // Step 5: Try multiple order actions.
+    // For this run we will PLACE only the SELL_OPEN (short covered call),
+    // and PREVIEW the *_CLOSE actions.
+    console.log('Step 4: Trying option order actions (SELL_OPEN will be placed)...\n');
 
     type Scenario = {
       label: string;
@@ -234,7 +236,6 @@ async function executeIntcOrder() {
     };
 
     const scenarios: Scenario[] = [
-      { label: 'BUY_OPEN (limit $0.10)', orderAction: 'BUY_OPEN', limitPrice: 0.1, clientOrderIdPrefix: 'wulfbo' },
       { label: 'SELL_OPEN (high limit)', orderAction: 'SELL_OPEN', limitPrice: 55.0, clientOrderIdPrefix: 'wulfso' },
       { label: 'BUY_CLOSE (limit $0.10)', orderAction: 'BUY_CLOSE', limitPrice: 0.1, clientOrderIdPrefix: 'wulfbc' },
       { label: 'SELL_CLOSE (high limit)', orderAction: 'SELL_CLOSE', limitPrice: 55.0, clientOrderIdPrefix: 'wulfsc' },
@@ -260,29 +261,50 @@ async function executeIntcOrder() {
       console.log('============================================================');
       console.log(`Scenario: ${s.label}`);
       console.log('============================================================');
-      try {
-        const preview = await client.previewOrder({
-          ...baseRequest,
-          orderAction: s.orderAction,
-          limitPrice: s.limitPrice,
-          // ≤20 alphanumeric, unique per attempt
-          clientOrderId: `${s.clientOrderIdPrefix}${Date.now()}`,
-        });
 
-        const previewId = preview?.PreviewIds?.[0]?.previewId;
-        console.log(`✓ PREVIEW OK for ${s.orderAction}. previewId=${previewId ?? 'unknown'}`);
-      } catch (err: any) {
-        const codeMatch = String(err?.response?.data ?? '').match(/<code>(\d+)<\/code>/);
-        const msgMatch = String(err?.response?.data ?? '').match(/<message>([\s\S]*?)<\/message>/);
-        const code = codeMatch?.[1];
-        const msg = msgMatch?.[1]?.replace(/&apos;/g, "'")?.trim();
-        console.log(`✗ PREVIEW FAILED for ${s.orderAction}${code ? ` (code ${code})` : ''}`);
-        if (msg) console.log(`  message: ${msg}`);
+      const clientOrderId = `${s.clientOrderIdPrefix}${Date.now()}`;
+      const request = {
+        ...baseRequest,
+        orderAction: s.orderAction,
+        limitPrice: s.limitPrice,
+        clientOrderId,
+      } as const;
+
+      // Opening orders: for this experiment we only PLACE SELL_OPEN.
+      if (s.orderAction === 'SELL_OPEN') {
+        try {
+          console.log(`→ Placing ${s.orderAction} via preview+place...`);
+          const placeResponse = await client.placeOrder(request);
+          console.log(`✓ PLACE OK for ${s.orderAction}. Response:`);
+          console.log(JSON.stringify(placeResponse, null, 2));
+        } catch (err: any) {
+          const codeMatch = String(err?.response?.data ?? '').match(/<code>(\d+)<\/code>/);
+          const msgMatch = String(err?.response?.data ?? '').match(/<message>([\s\S]*?)<\/message>/);
+          const code = codeMatch?.[1];
+          const msg = msgMatch?.[1]?.replace(/&apos;/g, "'")?.trim();
+          console.log(`✗ PLACE FAILED for ${s.orderAction}${code ? ` (code ${code})` : ''}`);
+          if (msg) console.log(`  message: ${msg}`);
+        }
+      } else {
+        // Closing orders: preview only
+        try {
+          const preview = await client.previewOrder(request);
+          const previewId = preview?.PreviewIds?.[0]?.previewId;
+          console.log(`✓ PREVIEW OK for ${s.orderAction}. previewId=${previewId ?? 'unknown'}`);
+        } catch (err: any) {
+          const codeMatch = String(err?.response?.data ?? '').match(/<code>(\d+)<\/code>/);
+          const msgMatch = String(err?.response?.data ?? '').match(/<message>([\s\S]*?)<\/message>/);
+          const code = codeMatch?.[1];
+          const msg = msgMatch?.[1]?.replace(/&apos;/g, "'")?.trim();
+          console.log(`✗ PREVIEW FAILED for ${s.orderAction}${code ? ` (code ${code})` : ''}`);
+          if (msg) console.log(`  message: ${msg}`);
+        }
       }
+
       console.log('');
     }
 
-    console.log('Preview-only scenario run complete.');
+    console.log('Scenario run complete.');
     process.exit(0);
   } catch (error: any) {
     console.error('\n=== ORDER PLACEMENT FAILED ===');
