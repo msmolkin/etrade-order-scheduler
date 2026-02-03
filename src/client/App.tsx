@@ -3,8 +3,9 @@ import OrderList from './components/OrderList';
 import OrderForm from './components/OrderForm';
 import OptionsChain from './components/OptionsChain';
 import ExpiredOrders from './components/ExpiredOrders';
+import PositionsCushion from './components/PositionsCushion';
 
-type Tab = 'orders' | 'create' | 'options' | 'expired';
+type Tab = 'orders' | 'create' | 'options' | 'positions' | 'expired';
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('orders');
@@ -30,11 +31,15 @@ function App() {
     setOrderDraft((prev) => ({
       ...prev,
       symbol,
+      securityType: 'OPTION',
+      optionType,
+      strikePrice,
+      expirationDate,
       action: side,
       orderType: 'LIMIT',
       quantity: prev.quantity ?? 1,
       limitPrice: price.toFixed(2),
-      notes: `From options chain: ${optionType} ${strikePrice} @ ${expirationDate}${
+      notes: `From options: ${optionType} ${strikePrice} @ ${expirationDate}${
         prev.notes ? `\n${prev.notes}` : ''
       }`,
     }));
@@ -58,6 +63,7 @@ function App() {
               { id: 'orders', label: 'Active Orders' },
               { id: 'create', label: 'Create Order' },
               { id: 'options', label: 'Options Chain' },
+              { id: 'positions', label: 'Trade Ideas (Max Pain)' },
               { id: 'expired', label: 'Expired Orders' },
             ].map((tab) => (
               <button
@@ -81,6 +87,9 @@ function App() {
         {activeTab === 'create' && <OrderForm draft={orderDraft} />}
         {activeTab === 'options' && (
           <OptionsChain onCreateOrderFromOption={handlePrefillFromOption} />
+        )}
+        {activeTab === 'positions' && (
+          <PositionsCushion onCreateOrderFromOption={handlePrefillFromOption} />
         )}
         {activeTab === 'expired' && <ExpiredOrders />}
       </main>

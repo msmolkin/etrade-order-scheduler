@@ -8,6 +8,10 @@ type OrderFormDraft = Partial<{
   quantity: number;
   limitPrice: string;
   notes: string;
+  securityType: 'EQUITY' | 'OPTION';
+  optionType: 'CALL' | 'PUT';
+  strikePrice: number;
+  expirationDate: string;
 }>;
 
 interface OrderFormProps {
@@ -18,6 +22,9 @@ const initialFormState = {
   accountId: '',
   symbol: '',
   securityType: 'EQUITY',
+  optionType: 'CALL' as 'CALL' | 'PUT',
+  strikePrice: '',
+  expirationDate: '',
   action: 'BUY',
   orderType: 'LIMIT',
   quantity: 1,
@@ -36,6 +43,9 @@ export default function OrderForm({ draft }: OrderFormProps) {
     accountId: '',
     symbol: '',
     securityType: 'EQUITY',
+    optionType: 'CALL' as 'CALL' | 'PUT',
+    strikePrice: '',
+    expirationDate: '',
     action: 'BUY',
     orderType: 'LIMIT',
     quantity: 1,
@@ -100,6 +110,13 @@ export default function OrderForm({ draft }: OrderFormProps) {
     setFormData((prev) => ({
       ...prev,
       symbol: draft.symbol ?? prev.symbol,
+      securityType: draft.securityType ?? prev.securityType,
+      optionType: draft.optionType ?? prev.optionType,
+      strikePrice:
+        draft.strikePrice != null
+          ? String(draft.strikePrice)
+          : prev.strikePrice,
+      expirationDate: draft.expirationDate ?? prev.expirationDate,
       action: draft.action ?? prev.action,
       orderType: draft.orderType ?? prev.orderType,
       quantity: draft.quantity ?? prev.quantity,
@@ -180,6 +197,10 @@ export default function OrderForm({ draft }: OrderFormProps) {
         quantity: parseInt(formData.quantity as any),
         limitPrice: formData.limitPrice ? parseFloat(formData.limitPrice) : undefined,
         stopPrice: formData.stopPrice ? parseFloat(formData.stopPrice) : undefined,
+        strikePrice: formData.strikePrice ? parseFloat(formData.strikePrice) : undefined,
+        expirationDate: formData.expirationDate
+          ? new Date(formData.expirationDate)
+          : undefined,
         scheduledFor: formData.scheduledFor ? new Date(formData.scheduledFor).toISOString() : undefined,
         requiresDaily: formData.preferredDuration !== formData.actualDuration,
         status: formData.scheduleEnabled ? 'SCHEDULED' : 'PENDING',
@@ -293,6 +314,82 @@ export default function OrderForm({ draft }: OrderFormProps) {
               className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
             />
           </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-slate-300 mb-2">
+              Security Type
+            </label>
+            <select
+              value={formData.securityType}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  securityType: e.target.value as 'EQUITY' | 'OPTION',
+                })
+              }
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+            >
+              <option value="EQUITY">Equity</option>
+              <option value="OPTION">Option</option>
+            </select>
+          </div>
+
+          {formData.securityType === 'OPTION' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Call / Put
+                </label>
+                <select
+                  value={formData.optionType}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      optionType: e.target.value as 'CALL' | 'PUT',
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                >
+                  <option value="CALL">CALL</option>
+                  <option value="PUT">PUT</option>
+                </select>
+              </div>
+
+              <div className="col-span-1">
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Exp / Strike
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="date"
+                    value={formData.expirationDate}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        expirationDate: e.target.value,
+                      })
+                    }
+                    className="px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500 text-xs"
+                  />
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder="Strike"
+                    value={formData.strikePrice}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        strikePrice: e.target.value,
+                      })
+                    }
+                    className="px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500 text-xs"
+                  />
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-4">

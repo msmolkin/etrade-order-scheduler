@@ -117,20 +117,53 @@ export class OrderExecutor {
   }
 
   private mapToETradeRequest(order: Order): ETradeOrderRequest {
+    const isOption = order.securityType === 'OPTION';
+
     const request: ETradeOrderRequest = {
       accountIdKey: order.accountId,
       symbol: order.symbol,
-      orderAction: order.action,
+      orderAction: order.action as ETradeOrderRequest['orderAction'],
       clientOrderId: `ord${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
       priceType: this.mapOrderType(order.orderType),
       quantity: order.quantity,
       orderTerm: this.mapDuration(order.actualDuration),
       marketSession: order.sessionTime === 'EXTENDED' ? 'EXTENDED' : 'REGULAR',
       allOrNone: false,
+      securityType: isOption ? 'OPTN' : 'EQ',
     };
+
+    // Option-specific mapping
+    if (isOption) {
+      if (order.optionType) {
+        request.callPut = order.optionType;
+      }
+
+      if (order.expirationDate instanceof Date && !isNaN(order.expirationDate.getTime())) {
+        request.expiryYear = order.expirationDate.getFullYear();
+        request.expiryMonth = order.expirationDate.getMonth() + 1;
+        request.expiryDay = order.expirationDate.getDate();
+      }
+
+      if (typeof order.strikePrice === 'number') {
+        request.strikePrice = order.strikePrice;
+      }
+
+      if (order.optionSymbol) {
+        request.productId = {
+          symbol: order.optionSymbol,
+          typeCode: 'OPTION',
+        };
+      }
+    }
+
     // Only include price fields if they have values
-    if (order.limitPrice) request.limitPrice = order.limitPrice;
-    if (order.stopPrice) request.stopPrice = order.stopPrice;
+    if (order.limitPrice != null) {
+      request.limitPrice = order.limitPrice;
+    }
+    if (order.stopPrice != null) {
+      request.stopPrice = order.stopPrice;
+    }
+
     return request;
   }
 

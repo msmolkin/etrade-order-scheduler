@@ -5,6 +5,8 @@ import http from 'http';
 import dotenv from 'dotenv';
 import ordersRouter from './routes/orders.js';
 import accountsRouter from './routes/accounts.js';
+import positionsRouter from './routes/positions.js';
+import positionsCushionsRouter from './routes/positions-cushions.js';
 import authRouter from './routes/auth.js';
 import { healthCheck } from './database/client.js';
 
@@ -31,6 +33,8 @@ app.get('/health', async (req, res) => {
 app.use('/api/orders', ordersRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/accounts', accountsRouter);
+app.use('/api/positions', positionsRouter);
+app.use('/api/positions/cushions', positionsCushionsRouter);
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -85,6 +89,8 @@ server.listen(port, () => {
   console.log('  POST   /api/auth/verify');
   console.log('  POST   /api/auth/auto');
   console.log('  GET    /api/accounts');
+  console.log('  GET    /api/positions');
+  console.log('  GET    /api/positions/cushions');
   console.log('  GET    /api/orders');
   console.log('  POST   /api/orders');
   console.log('  GET    /api/orders/:id');

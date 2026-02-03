@@ -132,3 +132,59 @@ export async function fetchAccounts(): Promise<{
   }
   return response.json();
 }
+
+export interface Position {
+  symbol: string;
+  securityType: string;
+  quantity: number;
+  underlyingSymbol?: string;
+  optionType?: 'CALL' | 'PUT';
+  strikePrice?: number;
+  expirationDate?: string;
+}
+
+export interface OptionLegSummary {
+  symbol: string;
+  optionType: 'CALL' | 'PUT';
+  strikePrice: number;
+  expirationDate: string;
+  openInterest: number;
+  bid: number;
+  ask: number;
+}
+
+export interface UnderlyingQuoteSummary {
+  symbol: string;
+  bid: number;
+  ask: number;
+  last: number;
+}
+
+export interface PositionCushion {
+  position: Position;
+  highestOiCall?: OptionLegSummary;
+  highestOiPut?: OptionLegSummary;
+  underlyingQuote: UnderlyingQuoteSummary | null;
+}
+
+export async function fetchPositionsCushions(
+  accountIdKey?: string
+): Promise<PositionCushion[]> {
+  const params = new URLSearchParams();
+  if (accountIdKey) params.append('accountIdKey', accountIdKey);
+
+  const response = await fetch(
+    `${API_BASE_URL}/positions/cushions?${params.toString()}`
+  );
+  if (!response.ok) {
+    try {
+      const err = await response.json();
+      throw new Error(err?.error || 'Failed to fetch trade ideas');
+    } catch {
+      throw new Error('Failed to fetch trade ideas');
+    }
+  }
+
+  const data = await response.json();
+  return data.cushions ?? [];
+}
