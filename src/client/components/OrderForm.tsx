@@ -1,7 +1,37 @@
-import React, { useState } from 'react';
-import { createOrder } from '../utils/api';
+import React, { useEffect, useState } from 'react';
+import { createOrder, fetchAccounts, type TradingAccount } from '../utils/api';
 
-export default function OrderForm() {
+type OrderFormDraft = Partial<{
+  symbol: string;
+  action: string;
+  orderType: string;
+  quantity: number;
+  limitPrice: string;
+  notes: string;
+}>;
+
+interface OrderFormProps {
+  draft?: OrderFormDraft;
+}
+
+const initialFormState = {
+  accountId: '',
+  symbol: '',
+  securityType: 'EQUITY',
+  action: 'BUY',
+  orderType: 'LIMIT',
+  quantity: 1,
+  limitPrice: '',
+  stopPrice: '',
+  preferredDuration: 'GTC',
+  actualDuration: 'DAY',
+  sessionTime: 'MARKET',
+  scheduledFor: '',
+  scheduleEnabled: false,
+  notes: '',
+};
+
+export default function OrderForm({ draft }: OrderFormProps) {
   const [formData, setFormData] = useState({
     accountId: '',
     symbol: '',
@@ -22,6 +52,59 @@ export default function OrderForm() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
+  const [accounts, setAccounts] = useState<TradingAccount[]>([]);
+  const [accountsLoading, setAccountsLoading] = useState(false);
+  const [accountsError, setAccountsError] = useState('');
+
+  useEffect(() => {
+    const loadAccounts = async () => {
+      try {
+        setAccountsLoading(true);
+        setAccountsError('');
+
+        const storedAccountIdKey =
+          typeof window !== 'undefined'
+            ? window.localStorage.getItem('selectedAccountIdKey')
+            : null;
+
+        const { accounts: fetchedAccounts, defaultAccountIdKey } = await fetchAccounts();
+        setAccounts(fetchedAccounts);
+
+        const initialAccountIdKey =
+          storedAccountIdKey && fetchedAccounts.some((a) => a.accountIdKey === storedAccountIdKey)
+            ? storedAccountIdKey
+            : defaultAccountIdKey;
+
+        if (initialAccountIdKey) {
+          setFormData((prev) => ({
+            ...prev,
+            accountId: initialAccountIdKey,
+          }));
+        }
+      } catch (err: any) {
+        setAccountsError(err.message || 'Failed to load accounts');
+      } finally {
+        setAccountsLoading(false);
+      }
+    };
+
+    loadAccounts();
+  }, []);
+
+  // Apply external draft pre-fill when it changes
+  useEffect(() => {
+    if (!draft) return;
+
+    setFormData((prev) => ({
+      ...prev,
+      symbol: draft.symbol ?? prev.symbol,
+      action: draft.action ?? prev.action,
+      orderType: draft.orderType ?? prev.orderType,
+      quantity: draft.quantity ?? prev.quantity,
+      limitPrice: draft.limitPrice ?? prev.limitPrice,
+      notes: draft.notes ?? prev.notes,
+    }));
+  }, [draft]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,20 +130,8 @@ export default function OrderForm() {
 
       // Reset form
       setFormData({
+        ...initialFormState,
         accountId: formData.accountId,
-        symbol: '',
-        securityType: 'EQUITY',
-        action: 'BUY',
-        orderType: 'LIMIT',
-        quantity: 1,
-        limitPrice: '',
-        stopPrice: '',
-        preferredDuration: 'GTC',
-        actualDuration: 'DAY',
-        sessionTime: 'MARKET',
-        scheduledFor: '',
-        scheduleEnabled: false,
-        notes: '',
       });
     } catch (err: any) {
       setError(err.message || 'Failed to create order');
@@ -85,19 +156,61 @@ export default function OrderForm() {
         </div>
       )}
 
+      {accountsError && (
+        <div className="mb-4 p-4 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-200 text-sm">
+          {accountsError}. You can still enter an Account ID manually below.
+        </div>
+      )}
+
       <form onSubmit={handleSubmit} className="bg-slate-800 rounded-lg p-6 space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">
               Account ID
             </label>
-            <input
-              type="text"
-              required
-              value={formData.accountId}
-              onChange={(e) => setFormData({ ...formData, accountId: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
-            />
+            {accountsLoading ? (
+              <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-400 text-sm">
+                Loading accounts...
+              </div>
+            ) : accounts.length > 0 ? (
+              <select
+                required
+                value={formData.accountId}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setFormData({ ...formData, accountId: value });
+                  if (typeof window !== 'undefined') {
+                    window.localStorage.setItem('selectedAccountIdKey', value);
+                  }
+                }}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              >
+                <option value="" disabled>
+                  Select an account
+                </option>
+                {accounts.map((account) => (
+                  <option key={account.accountIdKey} value={account.accountIdKey}>
+                    {account.nickname} — {account.name || 'Unnamed'} ({account.type}
+                    {account.status !== 'ACTIVE' ? `, ${account.status}` : ''})
+                    {account.isDefaultFromEnv ? ' [from .env ACCOUNT]' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="text"
+                required
+                value={formData.accountId}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    accountId: e.target.value,
+                  })
+                }
+                placeholder="Enter E*TRADE account key"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              />
+            )}
           </div>
 
           <div>

@@ -111,3 +111,24 @@ export async function fetchQuote(symbols: string[]): Promise<any[]> {
   if (!response.ok) throw new Error('Failed to fetch quote');
   return response.json();
 }
+
+export interface TradingAccount {
+  accountIdKey: string;
+  accountId: string;
+  nickname: string;
+  name: string;
+  type: string;
+  status: string;
+  isDefaultFromEnv: boolean;
+}
+
+export async function fetchAccounts(): Promise<{
+  accounts: TradingAccount[];
+  defaultAccountIdKey: string | null;
+}> {
+  const response = await fetch(`${API_BASE_URL}/accounts`);
+  if (!response.ok) {
+    throw new Error('Failed to fetch accounts');
+  }
+  return response.json();
+}

@@ -4,6 +4,7 @@ import { WebSocketServer } from 'ws';
 import http from 'http';
 import dotenv from 'dotenv';
 import ordersRouter from './routes/orders.js';
+import accountsRouter from './routes/accounts.js';
 import authRouter from './routes/auth.js';
 import { healthCheck } from './database/client.js';
 
@@ -29,6 +30,7 @@ app.get('/health', async (req, res) => {
 // Routes
 app.use('/api/orders', ordersRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/accounts', accountsRouter);
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -82,6 +84,7 @@ server.listen(port, () => {
   console.log('  GET    /api/auth/callback');
   console.log('  POST   /api/auth/verify');
   console.log('  POST   /api/auth/auto');
+  console.log('  GET    /api/accounts');
   console.log('  GET    /api/orders');
   console.log('  POST   /api/orders');
   console.log('  GET    /api/orders/:id');

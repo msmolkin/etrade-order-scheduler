@@ -8,6 +8,39 @@ type Tab = 'orders' | 'create' | 'options' | 'expired';
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('orders');
+  const [orderDraft, setOrderDraft] = useState<Partial<{
+    symbol: string;
+    action: string;
+    orderType: string;
+    quantity: number;
+    limitPrice: string;
+    notes: string;
+  }>>({});
+
+  const handlePrefillFromOption = (params: {
+    symbol: string;
+    optionType: 'CALL' | 'PUT';
+    strikePrice: number;
+    expirationDate: string;
+    side: 'BUY' | 'SELL';
+    price: number;
+  }) => {
+    const { symbol, optionType, strikePrice, expirationDate, side, price } = params;
+
+    setOrderDraft((prev) => ({
+      ...prev,
+      symbol,
+      action: side,
+      orderType: 'LIMIT',
+      quantity: prev.quantity ?? 1,
+      limitPrice: price.toFixed(2),
+      notes: `From options chain: ${optionType} ${strikePrice} @ ${expirationDate}${
+        prev.notes ? `\n${prev.notes}` : ''
+      }`,
+    }));
+
+    setActiveTab('create');
+  };
 
   return (
     <div className="min-h-screen bg-slate-900">
@@ -45,8 +78,10 @@ function App() {
 
       <main className="container mx-auto px-4 py-6">
         {activeTab === 'orders' && <OrderList />}
-        {activeTab === 'create' && <OrderForm />}
-        {activeTab === 'options' && <OptionsChain />}
+        {activeTab === 'create' && <OrderForm draft={orderDraft} />}
+        {activeTab === 'options' && (
+          <OptionsChain onCreateOrderFromOption={handlePrefillFromOption} />
+        )}
         {activeTab === 'expired' && <ExpiredOrders />}
       </main>
     </div>
