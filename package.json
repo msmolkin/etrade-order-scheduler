@@ -16,6 +16,7 @@
     "db:migrate": "tsx src/server/database/migrate.ts",
     "oauth": "tsx src/scripts/oauth-flow.ts",
     "execute:xom-test-order": "tsx src/scripts/execute-xom-order.ts",
+    "execute:intc-test-order": "tsx src/scripts/execute-intc-order.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
