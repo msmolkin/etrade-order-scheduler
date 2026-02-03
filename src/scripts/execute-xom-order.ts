@@ -124,18 +124,13 @@ async function executeXomOrder() {
     console.log('Step 3: Fetching XOM option chain for calls...');
     const optionChain = await client.getOptionChainForExpiry('XOM', expiryYear, expiryMonth, expiryDay);
     
-    // Get all calls (including 0 OI) for display, sorted by strike
-    const allCalls = optionChain
-      .filter((p) => p.call)
+    // Filter to calls with open interest and display
+    const callsWithOI = optionChain
+      .filter((p) => p.call && p.call.openInterest > 0)
       .map((p) => ({
         strike: p.strikePrice,
         ...p.call!,
       }))
-      .sort((a, b) => a.strike - b.strike);
-    
-    // Filter to calls with open interest for selection
-    const callsWithOI = allCalls
-      .filter((c) => c.openInterest > 0)
       .sort((a, b) => b.openInterest - a.openInterest);
 
     if (callsWithOI.length === 0) {
@@ -144,32 +139,22 @@ async function executeXomOrder() {
     }
 
     console.log('\n┌─────────────────────────────────────────────────────────────────────────┐');
-    console.log('│  XOM CALL OPTIONS - Full Chain (sorted by strike, then by OI)           │');
+    console.log('│  XOM CALL OPTIONS - Open Interest Analysis                              │');
     console.log('└─────────────────────────────────────────────────────────────────────────┘');
     console.log('Strike Price    Open Interest    Volume    Bid      Ask      OSI Key');
     console.log('─────────────────────────────────────────────────────────────────────────────');
     
-    // Display all strikes (including 0 OI) sorted by strike price
-    allCalls.forEach((call) => {
+    // Display strikes with OI > 0, sorted by OI (highest first)
+    callsWithOI.forEach((call) => {
       const strikeStr = `$${call.strike.toFixed(2)}`.padEnd(14);
-      const oiStr = call.openInterest > 0 ? call.openInterest.toLocaleString().padEnd(16) : '0'.padEnd(16);
+      const oiStr = call.openInterest.toLocaleString().padEnd(16);
       const volStr = call.volume.toLocaleString().padEnd(10);
       const bidStr = call.bid > 0 ? `$${call.bid.toFixed(2)}` : 'N/A';
       const askStr = call.ask > 0 ? `$${call.ask.toFixed(2)}` : 'N/A';
       const osiStr = call.osiKey || 'N/A';
-      // Highlight strikes with OI > 0
-      const marker = call.openInterest > 0 ? ' ' : ' ';
-      console.log(`${marker}${strikeStr}${oiStr}${volStr}${bidStr.padEnd(9)}${askStr.padEnd(9)}${osiStr}`);
+      console.log(`${strikeStr}${oiStr}${volStr}${bidStr.padEnd(9)}${askStr.padEnd(9)}${osiStr}`);
     });
     console.log('─────────────────────────────────────────────────────────────────────────────\n');
-    
-    if (callsWithOI.length > 0) {
-      console.log('Strikes with Open Interest (sorted by OI, highest first):');
-      callsWithOI.slice(0, 10).forEach((call, idx) => {
-        console.log(`  ${idx + 1}. $${call.strike.toFixed(2)} - OI: ${call.openInterest.toLocaleString()}`);
-      });
-      console.log('');
-    }
 
     // Select strike with highest open interest
     const selectedCall = callsWithOI[0];
