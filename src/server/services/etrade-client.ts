@@ -259,7 +259,7 @@ export class ETradeClient {
       previewResponse = await this.httpClient.post(
         `/v1/accounts/${request.accountIdKey}/orders/preview`,
         requestBody,
-        { headers: previewHeaders }
+        { headers: previewHeaders as any }
       );
       
       console.log('\n┌─────────────────────────────────────────────────────────────┐');
@@ -320,7 +320,7 @@ export class ETradeClient {
       placeResponse = await this.httpClient.post(
         `/v1/accounts/${request.accountIdKey}/orders/place`,
         placePayload,
-        { headers: placeHeaders }
+        { headers: placeHeaders as any }
       );
     } catch (error: any) {
       console.error('Place error:', error.response?.status);
@@ -396,7 +396,7 @@ export class ETradeClient {
       const placeResponse = await this.httpClient.post(
         `/v1/accounts/${request.accountIdKey}/orders/place`,
         placePayload,
-        { headers: placeHeaders }
+        { headers: placeHeaders as any }
       );
 
       console.log('\n┌─────────────────────────────────────────────────────────────┐');
