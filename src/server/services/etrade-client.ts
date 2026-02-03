@@ -71,6 +71,120 @@ export class ETradeClient {
     return response.data.AccountListResponse.Accounts.Account;
   }
 
+  /**
+   * Preview an order (no placement).
+   * Returns the raw PreviewOrderResponse payload.
+   */
+  async previewOrder(request: ETradeOrderRequest): Promise<any> {
+    const previewUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/preview`;
+    console.log('Calling preview URL:', previewUrl);
+    const previewHeaders = this.getAuthHeader(previewUrl, 'POST');
+
+    const securityType = request.securityType || 'EQ';
+    const product: Record<string, any> =
+      securityType === 'OPTN'
+        ? {
+            securityType: 'OPTN',
+            symbol: request.symbol,
+            ...(request.productId && { productId: request.productId }),
+            ...(request.callPut && { callPut: request.callPut }),
+            ...(request.expiryYear != null && {
+              expiryYear: request.expiryYear,
+              expiryMonth: request.expiryMonth,
+              expiryDay: request.expiryDay,
+              ...(request.strikePrice != null && { strikePrice: request.strikePrice }),
+            }),
+          }
+        : { securityType, symbol: request.symbol };
+
+    const orderDetails: Record<string, any> = {
+      allOrNone: request.allOrNone || false,
+      priceType: request.priceType,
+      orderTerm: request.orderTerm,
+      marketSession: request.marketSession,
+      Instrument: [
+        {
+          Product: product,
+          orderAction: request.orderAction,
+          quantityType: 'QUANTITY',
+          quantity: request.quantity,
+        },
+      ],
+    };
+
+    if (request.limitPrice !== undefined && request.limitPrice !== null) {
+      orderDetails.limitPrice = request.limitPrice;
+    }
+    if (request.stopPrice !== undefined && request.stopPrice !== null) {
+      orderDetails.stopPrice = request.stopPrice;
+    }
+
+    const orderPayload = {
+      orderType: securityType,
+      clientOrderId: request.clientOrderId,
+      Order: [orderDetails],
+    };
+
+    try {
+      const requestBody = { PreviewOrderRequest: orderPayload };
+      console.log('\n┌─────────────────────────────────────────────────────────────┐');
+      console.log('│  ORDER PREVIEW REQUEST                                      │');
+      console.log('└─────────────────────────────────────────────────────────────┘');
+      console.log('1) API URL:');
+      console.log(`   ${previewUrl}`);
+      console.log('\n2) Request Headers:');
+      console.log(JSON.stringify(previewHeaders, null, 2));
+      console.log('\n3) Request Body:');
+      console.log(JSON.stringify(requestBody, null, 2));
+
+      const previewResponse = await this.httpClient.post(
+        `/v1/accounts/${request.accountIdKey}/orders/preview`,
+        requestBody,
+        { headers: previewHeaders }
+      );
+
+      console.log('\n┌─────────────────────────────────────────────────────────────┐');
+      console.log('│  ORDER PREVIEW RESPONSE                                     │');
+      console.log('└─────────────────────────────────────────────────────────────┘');
+      console.log('4) Response Headers:');
+      const responseHeaders = previewResponse.headers || {};
+      console.log(JSON.stringify(responseHeaders, null, 2));
+      if (responseHeaders['x-et-trace']) {
+        console.log(`\nX-ET-Trace: ${responseHeaders['x-et-trace']}`);
+      }
+      console.log('\n5) Response Body:');
+      console.log(JSON.stringify(previewResponse.data, null, 2));
+
+      return previewResponse.data.PreviewOrderResponse;
+    } catch (error: any) {
+      console.log('\n┌─────────────────────────────────────────────────────────────┐');
+      console.log('│  ORDER PREVIEW ERROR                                        │');
+      console.log('└─────────────────────────────────────────────────────────────┘');
+      console.log('1) API URL:');
+      console.log(`   ${previewUrl}`);
+      console.log('\n2) Request Headers:');
+      console.log(JSON.stringify(previewHeaders, null, 2));
+      console.log('\n3) Request Body:');
+      console.log(JSON.stringify({ PreviewOrderRequest: orderPayload }, null, 2));
+
+      if (error.response) {
+        console.log('\n4) Response Status:', error.response.status);
+        console.log('5) Response Headers:');
+        const errorResponseHeaders = error.response.headers || {};
+        console.log(JSON.stringify(errorResponseHeaders, null, 2));
+        if (errorResponseHeaders['x-et-trace']) {
+          console.log(`\nX-ET-Trace: ${errorResponseHeaders['x-et-trace']}`);
+        }
+        console.log('\n6) Response Body:');
+        console.log(JSON.stringify(error.response.data, null, 2));
+      } else {
+        console.log('\n4) Error (no response):', error.message);
+      }
+
+      throw error;
+    }
+  }
+
   async placeOrder(request: ETradeOrderRequest): Promise<ETradeOrderResponse> {
     // Step 1: Preview the order
     const previewUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/preview`;

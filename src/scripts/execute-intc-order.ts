@@ -173,11 +173,27 @@ async function executeIntcOrder() {
     console.log(`  Option Symbol (built): ${optionSymbol}`);
     if (osiKey) console.log(`  OSI Key (from API): ${osiKey}`);
     console.log(`  Open Interest: ${selectedCall.openInterest.toLocaleString()}`);
-    console.log(`  Action: SELL`);
     console.log(`  Quantity: 1 contract`);
-    console.log(`  Limit Price: $55.00 per share\n`);
+    console.log(`  Note: Next we will preview multiple order actions (no placement)\n`);
 
-    const orderRequest = {
+    // Step 4: Try multiple order actions via PREVIEW ONLY
+    console.log('Step 4: Previewing multiple option order actions (no placement)...\n');
+
+    type Scenario = {
+      label: string;
+      orderAction: 'BUY_OPEN' | 'SELL_OPEN' | 'BUY_CLOSE' | 'SELL_CLOSE';
+      limitPrice: number;
+      clientOrderIdPrefix: string;
+    };
+
+    const scenarios: Scenario[] = [
+      { label: 'BUY_OPEN (limit $0.10)', orderAction: 'BUY_OPEN', limitPrice: 0.1, clientOrderIdPrefix: 'intcbo' },
+      { label: 'SELL_OPEN (high limit)', orderAction: 'SELL_OPEN', limitPrice: 55.0, clientOrderIdPrefix: 'intcso' },
+      { label: 'BUY_CLOSE (limit $0.10)', orderAction: 'BUY_CLOSE', limitPrice: 0.1, clientOrderIdPrefix: 'intcbc' },
+      { label: 'SELL_CLOSE (high limit)', orderAction: 'SELL_CLOSE', limitPrice: 55.0, clientOrderIdPrefix: 'intcsc' },
+    ];
+
+    const baseRequest = {
       accountIdKey: accountIdKey,
       symbol: 'INTC',
       securityType: 'OPTN' as const,
@@ -187,30 +203,39 @@ async function executeIntcOrder() {
       expiryMonth,
       expiryDay,
       strikePrice: selectedStrike,
-      orderAction: 'SELL_OPEN' as const,
       priceType: 'LIMIT' as const,
       quantity: 1,
-      limitPrice: 55.0,
       orderTerm: 'GOOD_FOR_DAY' as const,
       marketSession: 'REGULAR' as const,
-      clientOrderId: `intc${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
     };
 
-    // Step 4: Place the order
-    console.log('Step 4: Placing order with E*TRADE...');
-    console.log('This will go through preview and then place the order.\n');
+    for (const s of scenarios) {
+      console.log('============================================================');
+      console.log(`Scenario: ${s.label}`);
+      console.log('============================================================');
+      try {
+        const preview = await client.previewOrder({
+          ...baseRequest,
+          orderAction: s.orderAction,
+          limitPrice: s.limitPrice,
+          // ≤20 alphanumeric, unique per attempt
+          clientOrderId: `${s.clientOrderIdPrefix}${Date.now()}`,
+        });
 
-    const response = await client.placeOrder(orderRequest);
-
-    console.log('\n=== ORDER SUCCESSFULLY PLACED ===');
-    console.log('Response:', JSON.stringify(response, null, 2));
-
-    const orderIds = (response as any).OrderIds;
-    if (orderIds && orderIds.length > 0) {
-      console.log('\n✓ E*TRADE Order ID:', orderIds[0].orderId);
+        const previewId = preview?.PreviewIds?.[0]?.previewId;
+        console.log(`✓ PREVIEW OK for ${s.orderAction}. previewId=${previewId ?? 'unknown'}`);
+      } catch (err: any) {
+        const codeMatch = String(err?.response?.data ?? '').match(/<code>(\\d+)<\\/code>/);
+        const msgMatch = String(err?.response?.data ?? '').match(/<message>([\\s\\S]*?)<\\/message>/);
+        const code = codeMatch?.[1];
+        const msg = msgMatch?.[1]?.replace(/&apos;/g, "'")?.trim();
+        console.log(`✗ PREVIEW FAILED for ${s.orderAction}${code ? ` (code ${code})` : ''}`);
+        if (msg) console.log(`  message: ${msg}`);
+      }
+      console.log('');
     }
 
-    console.log('\nOrder placement complete!');
+    console.log('Preview-only scenario run complete.');
     process.exit(0);
   } catch (error: any) {
     console.error('\n=== ORDER PLACEMENT FAILED ===');
