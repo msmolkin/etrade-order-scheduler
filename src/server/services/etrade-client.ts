@@ -401,6 +401,56 @@ export class ETradeClient {
   }
 
   /**
+   * Fetch full option chain for a specific expiry (per E*TRADE Market API).
+   * Returns array of option pairs with strike, call/put data including open interest.
+   * Uses current stock price to center strikes around the money.
+   */
+  async getOptionChainForExpiry(
+    symbol: string,
+    expiryYear: number,
+    expiryMonth: number,
+    expiryDay: number
+  ): Promise<Array<{
+    strikePrice: number;
+    call?: { osiKey: string; openInterest: number; bid: number; ask: number; volume: number };
+    put?: { osiKey: string; openInterest: number; bid: number; ask: number; volume: number };
+  }>> {
+    // First get current stock price to center strikes around it
+    const quotes = await this.getQuote([symbol]);
+    const currentPrice = quotes[0]?.last ?? quotes[0]?.close ?? 0;
+    
+    const monthStr = String(expiryMonth).padStart(2, '0');
+    // Use strikePriceNear to center around current price, and increase noOfStrikes to get more range
+    const url = `${this.baseUrl}/v1/market/optionchains?symbol=${symbol}&expiryYear=${expiryYear}&expiryMonth=${monthStr}&expiryDay=${expiryDay}&strikePriceNear=${Math.round(currentPrice)}&noOfStrikes=100`;
+    const headers = this.getAuthHeader(url);
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers });
+    const chain = response.data?.OptionChainResponse || response.data?.optionChainResponse;
+    const pairs = chain?.OptionPair || chain?.optionPairs || [];
+    return pairs.map((pair: any) => {
+      const call = pair.Call || pair.call;
+      const put = pair.Put || pair.put;
+      const strike = call?.strikePrice ?? put?.strikePrice ?? call?.StrikePrice ?? put?.StrikePrice;
+      return {
+        strikePrice: Number(strike),
+        call: call ? {
+          osiKey: call.osiKey ?? call.OsiKey ?? '',
+          openInterest: Number(call.openInterest ?? call.OpenInterest ?? 0),
+          bid: Number(call.bid ?? call.Bid ?? 0),
+          ask: Number(call.ask ?? call.Ask ?? 0),
+          volume: Number(call.volume ?? call.Volume ?? 0),
+        } : undefined,
+        put: put ? {
+          osiKey: put.osiKey ?? put.OsiKey ?? '',
+          openInterest: Number(put.openInterest ?? put.OpenInterest ?? 0),
+          bid: Number(put.bid ?? put.Bid ?? 0),
+          ask: Number(put.ask ?? put.Ask ?? 0),
+          volume: Number(put.volume ?? put.Volume ?? 0),
+        } : undefined,
+      };
+    }).filter((p: any) => !isNaN(p.strikePrice)).sort((a: any, b: any) => a.strikePrice - b.strikePrice);
+  }
+
+  /**
    * Fetch option chain for a specific expiry and strike (per E*TRADE Market API).
    * Returns the osiKey for the call/put at the given strike, or null if not found.
    * Use getOptionExpireDates() to get valid expiry dates first.
@@ -413,22 +463,11 @@ export class ETradeClient {
     callPut: 'CALL' | 'PUT',
     strikePrice: number
   ): Promise<string | null> {
-    const monthStr = String(expiryMonth).padStart(2, '0');
-    const url = `${this.baseUrl}/v1/market/optionchains?symbol=${symbol}&expiryYear=${expiryYear}&expiryMonth=${monthStr}&expiryDay=${expiryDay}&strikePriceNear=${strikePrice}&noOfStrikes=3`;
-    const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers });
-    const chain = response.data?.OptionChainResponse || response.data?.optionChainResponse;
-    const pairs = chain?.OptionPair || chain?.optionPairs || [];
-    for (const pair of pairs) {
-      const leg = callPut === 'CALL' ? (pair.Call || pair.call) : (pair.Put || pair.put);
-      if (!leg) continue;
-      const strike = leg.strikePrice ?? leg.StrikePrice;
-      if (strike != null && Math.round(Number(strike)) === Math.round(strikePrice)) {
-        const osiKey = leg.osiKey ?? leg.OsiKey;
-        if (osiKey) return osiKey;
-      }
-    }
-    return null;
+    const chain = await this.getOptionChainForExpiry(symbol, expiryYear, expiryMonth, expiryDay);
+    const pair = chain.find((p) => Math.round(p.strikePrice) === Math.round(strikePrice));
+    if (!pair) return null;
+    const leg = callPut === 'CALL' ? pair.call : pair.put;
+    return leg?.osiKey ?? null;
   }
 
   private transformOptionContract(contract: any, type: 'CALL' | 'PUT'): any {

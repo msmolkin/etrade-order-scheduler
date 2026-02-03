@@ -89,8 +89,9 @@ async function executeXomOrder() {
       if (matchingAccount) {
         console.log(`Found account matching ACCOUNT env var '${accountNickname}': ${matchingAccount.accountId}`);
       } else {
-        console.log(`WARNING: No account found ending with '${accountNickname}', using first active account`);
+        console.log(`WARNING: No account found ending with '${accountNickname}'`);
         console.log(`Available account IDs: ${activeAccounts.map((a: any) => a.accountId).join(', ')}`);
+        console.log(`Using first active account as fallback`);
       }
     }
     const activeAccount = matchingAccount ?? activeAccounts[0];
@@ -99,7 +100,7 @@ async function executeXomOrder() {
     console.log(`Account ID: ${activeAccount.accountId}`);
     console.log(`Account Key: ${accountIdKey}\n`);
 
-    // Step 2: Get valid expiry dates from E*TRADE, then resolve $145 Call (per E*TRADE doc)
+    // Step 2: Get valid expiry dates and fetch option chain to select best strike by OI
     console.log('Step 2: Fetching valid XOM option expiry dates...');
     const expireDates = await client.getOptionExpireDates('XOM');
     const today = new Date();
@@ -119,15 +120,72 @@ async function executeXomOrder() {
       year: 'numeric',
     });
     console.log(`  Using next expiry: ${expiryLabel}\n`);
-    console.log('  Resolving XOM $145 Call via option chain...');
-    const osiKey = await client.getOptionOsiKey('XOM', expiryYear, expiryMonth, expiryDay, 'CALL', 145);
-    const optionSymbol = buildOptionSymbol('XOM', expiryYYMMDD, 'C', 145);
+
+    console.log('Step 3: Fetching XOM option chain for calls...');
+    const optionChain = await client.getOptionChainForExpiry('XOM', expiryYear, expiryMonth, expiryDay);
+    
+    // Get all calls (including 0 OI) for display, sorted by strike
+    const allCalls = optionChain
+      .filter((p) => p.call)
+      .map((p) => ({
+        strike: p.strikePrice,
+        ...p.call!,
+      }))
+      .sort((a, b) => a.strike - b.strike);
+    
+    // Filter to calls with open interest for selection
+    const callsWithOI = allCalls
+      .filter((c) => c.openInterest > 0)
+      .sort((a, b) => b.openInterest - a.openInterest);
+
+    if (callsWithOI.length === 0) {
+      console.error('ERROR: No calls with open interest found');
+      process.exit(1);
+    }
+
+    console.log('\n┌─────────────────────────────────────────────────────────────────────────┐');
+    console.log('│  XOM CALL OPTIONS - Full Chain (sorted by strike, then by OI)           │');
+    console.log('└─────────────────────────────────────────────────────────────────────────┘');
+    console.log('Strike Price    Open Interest    Volume    Bid      Ask      OSI Key');
+    console.log('─────────────────────────────────────────────────────────────────────────────');
+    
+    // Display all strikes (including 0 OI) sorted by strike price
+    allCalls.forEach((call) => {
+      const strikeStr = `$${call.strike.toFixed(2)}`.padEnd(14);
+      const oiStr = call.openInterest > 0 ? call.openInterest.toLocaleString().padEnd(16) : '0'.padEnd(16);
+      const volStr = call.volume.toLocaleString().padEnd(10);
+      const bidStr = call.bid > 0 ? `$${call.bid.toFixed(2)}` : 'N/A';
+      const askStr = call.ask > 0 ? `$${call.ask.toFixed(2)}` : 'N/A';
+      const osiStr = call.osiKey || 'N/A';
+      // Highlight strikes with OI > 0
+      const marker = call.openInterest > 0 ? ' ' : ' ';
+      console.log(`${marker}${strikeStr}${oiStr}${volStr}${bidStr.padEnd(9)}${askStr.padEnd(9)}${osiStr}`);
+    });
+    console.log('─────────────────────────────────────────────────────────────────────────────\n');
+    
+    if (callsWithOI.length > 0) {
+      console.log('Strikes with Open Interest (sorted by OI, highest first):');
+      callsWithOI.slice(0, 10).forEach((call, idx) => {
+        console.log(`  ${idx + 1}. $${call.strike.toFixed(2)} - OI: ${call.openInterest.toLocaleString()}`);
+      });
+      console.log('');
+    }
+
+    // Select strike with highest open interest
+    const selectedCall = callsWithOI[0];
+    const selectedStrike = selectedCall.strike;
+    const osiKey = selectedCall.osiKey;
+    
+    console.log(`Selected strike: $${selectedStrike.toFixed(2)} (Highest OI: ${selectedCall.openInterest.toLocaleString()})\n`);
+
+    const optionSymbol = buildOptionSymbol('XOM', expiryYYMMDD, 'C', selectedStrike);
     console.log(`  Underlying: XOM`);
     console.log(`  Option Type: CALL`);
-    console.log(`  Strike Price: $145`);
+    console.log(`  Strike Price: $${selectedStrike.toFixed(2)}`);
     console.log(`  Expiration: ${expiryLabel}`);
     console.log(`  Option Symbol (built): ${optionSymbol}`);
     if (osiKey) console.log(`  OSI Key (from API): ${osiKey}`);
+    console.log(`  Open Interest: ${selectedCall.openInterest.toLocaleString()}`);
     console.log(`  Action: SELL`);
     console.log(`  Quantity: 1 contract`);
     console.log(`  Limit Price: $55.00 per share\n`);
@@ -142,7 +200,7 @@ async function executeXomOrder() {
       expiryYear,
       expiryMonth,
       expiryDay,
-      strikePrice: 145,
+      strikePrice: selectedStrike,
       orderAction: 'SELL_OPEN' as const,
       priceType: 'LIMIT' as const,
       quantity: 1,
@@ -152,8 +210,8 @@ async function executeXomOrder() {
       clientOrderId: `xom${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
     };
 
-    // Step 3: Place the order
-    console.log('Step 3: Placing order with E*TRADE...');
+    // Step 4: Place the order
+    console.log('Step 4: Placing order with E*TRADE...');
     console.log('This will go through preview and then place the order.\n');
 
     const response = await client.placeOrder(orderRequest);
