@@ -306,46 +306,45 @@ export default function OrderForm({ draft }: OrderFormProps) {
   };
 
   return (
-    <div className="max-w-2xl mx-auto">
-      <h2 className="text-xl font-semibold text-white mb-6">Create New Order</h2>
+    <div className="w-full max-w-md mx-auto px-2">
+      <h2 className="text-lg font-semibold text-white mb-4">Create Order</h2>
 
       {error && (
-        <div className="mb-4 p-4 bg-red-500/20 border border-red-500 rounded-lg text-red-400">
+        <div className="mb-3 p-3 bg-red-500/20 border border-red-500 rounded-lg text-red-400 text-sm">
           {error}
         </div>
       )}
 
       {success && (
-        <div className="mb-4 p-4 bg-green-500/20 border border-green-500 rounded-lg text-green-400">
+        <div className="mb-3 p-3 bg-green-500/20 border border-green-500 rounded-lg text-green-400 text-sm">
           Order created successfully!
         </div>
       )}
 
       {accountsError && (
-        <div className="mb-4 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-200 text-sm">
+        <div className="mb-3 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-200 text-xs">
           {accountsError}. Enter an Account ID manually below.
         </div>
       )}
 
       {autoPricingError && (
-        <div className="mb-4 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-100 text-xs">
+        <div className="mb-3 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-100 text-xs">
           {autoPricingError}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="bg-slate-800 rounded-lg p-6 space-y-6">
-        <section className="space-y-4">
+      <form onSubmit={handleSubmit} className="bg-slate-800 rounded-lg p-4 space-y-4">
+        <section className="space-y-3">
           <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
             Account & symbol
           </h3>
-          <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Account ID
+            <label className="block text-xs font-medium text-slate-400 mb-1">
+              Account
             </label>
             {accountsLoading ? (
-              <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-slate-400 text-sm">
-                Loading accounts...
+              <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-slate-400 text-sm">
+                Loading...
               </div>
             ) : accounts.length > 0 ? (
               <select
@@ -358,10 +357,10 @@ export default function OrderForm({ draft }: OrderFormProps) {
                     window.localStorage.setItem('selectedAccountIdKey', value);
                   }
                 }}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
               >
                 <option value="" disabled>
-                  Select an account
+                  Select account
                 </option>
                 {accounts.map((account) => (
                   <option key={account.accountIdKey} value={account.accountIdKey}>
@@ -382,14 +381,14 @@ export default function OrderForm({ draft }: OrderFormProps) {
                     accountId: e.target.value,
                   })
                 }
-                placeholder="Enter E*TRADE account key"
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                placeholder="E*TRADE account key"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
               />
             )}
           </div>
 
           <div className="relative" ref={symbolInputRef}>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
+            <label className="block text-xs font-medium text-slate-400 mb-1">
               Symbol
             </label>
             <input
@@ -420,7 +419,7 @@ export default function OrderForm({ draft }: OrderFormProps) {
               </div>
             )}
             {showSymbolDropdown && symbolResults.length > 0 && (
-              <div className="absolute z-20 mt-1 w-full max-h-56 overflow-auto rounded-md bg-slate-800 border border-slate-700 shadow-lg">
+              <div className="absolute z-20 mt-1 w-full max-h-48 overflow-auto rounded bg-slate-800 border border-slate-700 shadow-lg">
                 {symbolResults.map((result) => (
                   <button
                     key={`${result.symbol}-${result.exchange}-${result.securityType}`}
@@ -454,17 +453,15 @@ export default function OrderForm({ draft }: OrderFormProps) {
               </div>
             )}
           </div>
-        </div>
         </section>
 
-        <section className="space-y-4">
+        <section className="space-y-3">
           <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
             Security & order
           </h3>
-        <div className="grid grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Security Type
+            <label className="block text-xs font-medium text-slate-400 mb-1">
+              Security type
             </label>
             <select
               value={formData.securityType}
@@ -474,7 +471,7 @@ export default function OrderForm({ draft }: OrderFormProps) {
                   securityType: e.target.value as 'EQUITY' | 'OPTION',
                 })
               }
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             >
               <option value="EQUITY">Equity</option>
               <option value="OPTION">Option</option>
@@ -484,7 +481,7 @@ export default function OrderForm({ draft }: OrderFormProps) {
           {formData.securityType === 'OPTION' && (
             <>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-2">
+                <label className="block text-xs font-medium text-slate-400 mb-1">
                   Call / Put
                 </label>
                 <select
@@ -495,51 +492,51 @@ export default function OrderForm({ draft }: OrderFormProps) {
                       optionType: e.target.value as 'CALL' | 'PUT',
                     })
                   }
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
                 >
                   <option value="CALL">CALL</option>
                   <option value="PUT">PUT</option>
                 </select>
               </div>
-
-              <div className="col-span-1">
-                <label className="block text-sm font-medium text-slate-300 mb-2">
-                  Exp / Strike
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Expiration
                 </label>
-                <div className="grid grid-cols-2 gap-2">
-                  <input
-                    type="date"
-                    value={formData.expirationDate}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        expirationDate: e.target.value,
-                      })
-                    }
-                    className="px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500 text-xs"
-                  />
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="Strike"
-                    value={formData.strikePrice}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        strikePrice: e.target.value,
-                      })
-                    }
-                    className="px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500 text-xs"
-                  />
-                </div>
+                <input
+                  type="date"
+                  value={formData.expirationDate}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      expirationDate: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Strike
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  placeholder="Strike price"
+                  value={formData.strikePrice}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      strikePrice: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                />
               </div>
             </>
           )}
-        </div>
 
-        <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
+            <label className="block text-xs font-medium text-slate-400 mb-1">
               Action
             </label>
             <select
@@ -555,13 +552,13 @@ export default function OrderForm({ draft }: OrderFormProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Order Type
+            <label className="block text-xs font-medium text-slate-400 mb-1">
+              Order type
             </label>
             <select
               value={formData.orderType}
               onChange={(e) => setFormData({ ...formData, orderType: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             >
               <option value="MARKET">MARKET</option>
               <option value="LIMIT">LIMIT</option>
@@ -569,16 +566,14 @@ export default function OrderForm({ draft }: OrderFormProps) {
               <option value="STOP_LIMIT">STOP LIMIT</option>
             </select>
           </div>
-        </div>
         </section>
 
-        <section className="space-y-4">
+        <section className="space-y-3">
           <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
             Quantity & price
           </h3>
-        <div className="grid grid-cols-3 gap-4">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
+            <label className="block text-xs font-medium text-slate-400 mb-1">
               Quantity
             </label>
             <input
@@ -587,15 +582,15 @@ export default function OrderForm({ draft }: OrderFormProps) {
               min="1"
               value={formData.quantity}
               onChange={(e) => setFormData({ ...formData, quantity: parseInt(e.target.value) || 1 })}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             />
           </div>
 
           {(formData.orderType === 'LIMIT' || formData.orderType === 'STOP_LIMIT') && (
             <div>
-              <div className="flex items-center justify-between mb-2">
-                <label className="block text-sm font-medium text-slate-300">
-                  Limit Price
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-slate-400">
+                  Limit price
                 </label>
                 {autoPricing && (
                   <span className="text-xs text-slate-400">Syncing with market...</span>
@@ -606,41 +601,39 @@ export default function OrderForm({ draft }: OrderFormProps) {
                 step="0.01"
                 value={formData.limitPrice}
                 onChange={(e) => setFormData({ ...formData, limitPrice: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
               />
             </div>
           )}
 
           {(formData.orderType === 'STOP' || formData.orderType === 'STOP_LIMIT') && (
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-2">
-                Stop Price
+              <label className="block text-xs font-medium text-slate-400 mb-1">
+                Stop price
               </label>
               <input
                 type="number"
                 step="0.01"
                 value={formData.stopPrice}
                 onChange={(e) => setFormData({ ...formData, stopPrice: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
               />
             </div>
           )}
-        </div>
         </section>
 
-        <section className="space-y-4">
+        <section className="space-y-3">
           <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
             Duration & schedule
           </h3>
-        <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Preferred Duration
+            <label className="block text-xs font-medium text-slate-400 mb-1">
+              Preferred duration
             </label>
             <select
               value={formData.preferredDuration}
               onChange={(e) => setFormData({ ...formData, preferredDuration: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             >
               <option value="GTC">GTC (Good Till Cancel)</option>
               <option value="DAY">DAY</option>
@@ -650,13 +643,13 @@ export default function OrderForm({ draft }: OrderFormProps) {
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Actual Duration (What Gets Placed)
+            <label className="block text-xs font-medium text-slate-400 mb-1">
+              Actual duration (what gets placed)
             </label>
             <select
               value={formData.actualDuration}
               onChange={(e) => setFormData({ ...formData, actualDuration: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             >
               <option value="DAY">DAY</option>
               <option value="GTC">GTC</option>
@@ -664,7 +657,6 @@ export default function OrderForm({ draft }: OrderFormProps) {
               <option value="FILL_OR_KILL">Fill or Kill</option>
             </select>
           </div>
-        </div>
 
         {formData.preferredDuration !== formData.actualDuration && (
           <div className="p-3 bg-amber-500/20 border border-amber-500/50 rounded-lg text-amber-400 text-sm">
@@ -672,63 +664,66 @@ export default function OrderForm({ draft }: OrderFormProps) {
           </div>
         )}
 
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-2">
-            Session Time
-          </label>
-          <select
-            value={formData.sessionTime}
-            onChange={(e) => setFormData({ ...formData, sessionTime: e.target.value })}
-            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
-          >
-            <option value="MARKET">Market Hours (9:30 AM)</option>
-            <option value="EXTENDED">Extended Hours (7:00 AM)</option>
-          </select>
-        </div>
-
-        <div>
-          <label className="flex items-center gap-2 text-slate-300">
-            <input
-              type="checkbox"
-              checked={formData.scheduleEnabled}
-              onChange={(e) => setFormData({ ...formData, scheduleEnabled: e.target.checked })}
-              className="w-4 h-4"
-            />
-            <span className="text-sm font-medium">Enable Scheduling</span>
-          </label>
-        </div>
-
-        {formData.scheduleEnabled && (
           <div>
-            <label className="block text-sm font-medium text-slate-300 mb-2">
-              Schedule For
+            <label className="block text-xs font-medium text-slate-400 mb-1">
+              Session time
             </label>
-            <input
-              type="datetime-local"
-              value={formData.scheduledFor}
-              onChange={(e) => setFormData({ ...formData, scheduledFor: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
-            />
+            <select
+              value={formData.sessionTime}
+              onChange={(e) => setFormData({ ...formData, sessionTime: e.target.value })}
+              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+            >
+              <option value="MARKET">Market hours (9:30 AM)</option>
+              <option value="EXTENDED">Extended hours (7:00 AM)</option>
+            </select>
+            <p className="mt-1 text-xs text-slate-500">
+              When scheduling is on: Extended = 7:00 AM, Market = 9:30 AM.
+            </p>
           </div>
-        )}
+
+          <div>
+            <label className="flex items-center gap-2 text-slate-400 text-xs font-medium">
+              <input
+                type="checkbox"
+                checked={formData.scheduleEnabled}
+                onChange={(e) => setFormData({ ...formData, scheduleEnabled: e.target.checked })}
+                className="w-4 h-4"
+              />
+              Enable scheduling
+            </label>
+          </div>
+
+          {formData.scheduleEnabled && (
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">
+                Schedule for
+              </label>
+              <input
+                type="datetime-local"
+                value={formData.scheduledFor}
+                onChange={(e) => setFormData({ ...formData, scheduledFor: e.target.value })}
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+              />
+            </div>
+          )}
         </section>
 
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-2">
+          <label className="block text-xs font-medium text-slate-400 mb-1">
             Notes (optional)
           </label>
           <textarea
             value={formData.notes}
             onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-            rows={3}
-            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+            rows={2}
+            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
           />
         </div>
 
         <button
           type="submit"
           disabled={submitting}
-          className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white font-medium rounded-lg transition-colors"
+          className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-sm font-medium rounded transition-colors"
         >
           {submitting ? 'Creating...' : 'Create Order'}
         </button>
