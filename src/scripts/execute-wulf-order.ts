@@ -18,7 +18,7 @@ function buildOptionSymbol(
 }
 
 async function executeIntcOrder() {
-  console.log('=== INTC Call Option Sell Order Execution ===\n');
+  console.log('=== WULF Call Option Sell Order Execution ===\n');
 
   // Check sandbox mode
   const isSandbox = process.env.ETRADE_SANDBOX === 'true';
@@ -117,15 +117,15 @@ async function executeIntcOrder() {
         [];
       const posList = Array.isArray(positions) ? positions : [positions];
 
-      const intcEquityPos = posList.find((p: any) => {
+      const wulfEquityPos = posList.find((p: any) => {
         const sym = p?.Product?.symbol ?? p?.product?.symbol ?? p?.symbol;
         const sec = p?.Product?.securityType ?? p?.product?.securityType ?? p?.securityType;
-        return String(sym).toUpperCase() === 'INTC' && String(sec).toUpperCase() !== 'OPTN';
+        return String(sym).toUpperCase() === 'WULF' && String(sec).toUpperCase() !== 'OPTN';
       });
-      const intcQty =
-        Number(intcEquityPos?.quantity ?? intcEquityPos?.Quantity ?? intcEquityPos?.positionQuantity ?? 0) || 0;
+      const wulfQty =
+        Number(wulfEquityPos?.quantity ?? wulfEquityPos?.Quantity ?? wulfEquityPos?.positionQuantity ?? 0) || 0;
 
-      console.log(`  INTC equity position qty (best-effort): ${intcQty}`);
+      console.log(`  WULF equity position qty (best-effort): ${wulfQty}`);
       console.log(`  Open orders count: ${openOrders.length}`);
     } catch (e: any) {
       console.log('  WARNING: Could not fetch portfolio/orders (continuing).');
@@ -134,8 +134,8 @@ async function executeIntcOrder() {
     console.log('');
 
     // Step 2: Get valid expiry dates and fetch option chain to select best strike by OI
-    console.log('Step 2: Fetching valid INTC option expiry dates...');
-    const expireDates = await client.getOptionExpireDates('INTC');
+    console.log('Step 2: Fetching valid WULF option expiry dates...');
+    const expireDates = await client.getOptionExpireDates('WULF');
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const nextExpiry = expireDates.find(
@@ -154,8 +154,8 @@ async function executeIntcOrder() {
     });
     console.log(`  Using next expiry: ${expiryLabel}\n`);
 
-    console.log('Step 3: Fetching INTC option chain for calls...');
-    const optionChain = await client.getOptionChainForExpiry('INTC', expiryYear, expiryMonth, expiryDay);
+    console.log('Step 3: Fetching WULF option chain for calls...');
+    const optionChain = await client.getOptionChainForExpiry('WULF', expiryYear, expiryMonth, expiryDay);
 
     // Filter to calls with open interest and display
     const callsWithOI = optionChain
@@ -172,7 +172,7 @@ async function executeIntcOrder() {
     }
 
     console.log('\n┌─────────────────────────────────────────────────────────────────────────┐');
-    console.log('│  INTC CALL OPTIONS - Open Interest Analysis                             │');
+    console.log('│  WULF CALL OPTIONS - Open Interest Analysis                             │');
     console.log('└─────────────────────────────────────────────────────────────────────────┘');
     console.log('Strike Price    Open Interest    Volume    Bid      Ask      OSI Key');
     console.log('─────────────────────────────────────────────────────────────────────────────');
@@ -189,15 +189,18 @@ async function executeIntcOrder() {
     });
     console.log('─────────────────────────────────────────────────────────────────────────────\n');
 
-    // Select strike with highest open interest
-    const selectedCall = callsWithOI[0];
+    // Select strike with highest open interest (rank #1)
+    const selectedIndex = 0;
+    const selectedCall = callsWithOI[selectedIndex];
     const selectedStrike = selectedCall.strike;
     const osiKey = selectedCall.osiKey;
 
-    console.log(`Selected strike: $${selectedStrike.toFixed(2)} (Highest OI: ${selectedCall.openInterest.toLocaleString()})\n`);
+    console.log(
+      `Selected strike: $${selectedStrike.toFixed(2)} (rank ${selectedIndex + 1} by OI: ${selectedCall.openInterest.toLocaleString()})\n`
+    );
 
-    const optionSymbol = buildOptionSymbol('INTC', expiryYYMMDD, 'C', selectedStrike);
-    console.log(`  Underlying: INTC`);
+    const optionSymbol = buildOptionSymbol('WULF', expiryYYMMDD, 'C', selectedStrike);
+    console.log(`  Underlying: WULF`);
     console.log(`  Option Type: CALL`);
     console.log(`  Strike Price: $${selectedStrike.toFixed(2)}`);
     console.log(`  Expiration: ${expiryLabel}`);
@@ -231,15 +234,15 @@ async function executeIntcOrder() {
     };
 
     const scenarios: Scenario[] = [
-      { label: 'BUY_OPEN (limit $0.10)', orderAction: 'BUY_OPEN', limitPrice: 0.1, clientOrderIdPrefix: 'intcbo' },
-      { label: 'SELL_OPEN (high limit)', orderAction: 'SELL_OPEN', limitPrice: 55.0, clientOrderIdPrefix: 'intcso' },
-      { label: 'BUY_CLOSE (limit $0.10)', orderAction: 'BUY_CLOSE', limitPrice: 0.1, clientOrderIdPrefix: 'intcbc' },
-      { label: 'SELL_CLOSE (high limit)', orderAction: 'SELL_CLOSE', limitPrice: 55.0, clientOrderIdPrefix: 'intcsc' },
+      { label: 'BUY_OPEN (limit $0.10)', orderAction: 'BUY_OPEN', limitPrice: 0.1, clientOrderIdPrefix: 'wulfbo' },
+      { label: 'SELL_OPEN (high limit)', orderAction: 'SELL_OPEN', limitPrice: 55.0, clientOrderIdPrefix: 'wulfso' },
+      { label: 'BUY_CLOSE (limit $0.10)', orderAction: 'BUY_CLOSE', limitPrice: 0.1, clientOrderIdPrefix: 'wulfbc' },
+      { label: 'SELL_CLOSE (high limit)', orderAction: 'SELL_CLOSE', limitPrice: 55.0, clientOrderIdPrefix: 'wulfsc' },
     ];
 
     const baseRequest = {
       accountIdKey: accountIdKey,
-      symbol: 'INTC',
+      symbol: 'WULF',
       securityType: 'OPTN' as const,
       ...(osiKey && { productId: { symbol: osiKey, typeCode: 'OPTION' as const } }),
       callPut: 'CALL' as const,
