@@ -442,6 +442,32 @@ export class ETradeClient {
     return response.data.OrdersResponse.Order[0];
   }
 
+  /**
+   * List orders for an account (defaults to OPEN).
+   * E*TRADE Order API: GET /v1/accounts/{accountIdKey}/orders?status=OPEN
+   */
+  async listOrders(accountIdKey: string, status: string = 'OPEN'): Promise<any[]> {
+    const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/orders?status=${encodeURIComponent(status)}`;
+    const headers = this.getAuthHeader(url);
+    const response = await this.httpClient.get(
+      `/v1/accounts/${accountIdKey}/orders?status=${encodeURIComponent(status)}`,
+      { headers }
+    );
+    const orders = response.data?.OrdersResponse?.Order ?? response.data?.ordersResponse?.order ?? [];
+    return Array.isArray(orders) ? orders : [orders];
+  }
+
+  /**
+   * View portfolio / positions for an account.
+   * E*TRADE Portfolio API: GET /v1/accounts/{accountIdKey}/portfolio
+   */
+  async getPortfolio(accountIdKey: string): Promise<any> {
+    const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/portfolio`;
+    const headers = this.getAuthHeader(url);
+    const response = await this.httpClient.get(`/v1/accounts/${accountIdKey}/portfolio`, { headers });
+    return response.data?.PortfolioResponse ?? response.data?.portfolioResponse ?? response.data;
+  }
+
   async cancelOrder(accountIdKey: string, orderId: string): Promise<void> {
     const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/orders/cancel`;
     const headers = this.getAuthHeader(url, 'PUT');

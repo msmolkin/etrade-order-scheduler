@@ -102,6 +102,37 @@ async function executeIntcOrder() {
     console.log(`Account ID: ${activeAccount.accountId}`);
     console.log(`Account Key: ${accountIdKey}\n`);
 
+    // Step 1b: Inspect portfolio + open orders to confirm covered-call prerequisites / existing positions
+    console.log('Step 1b: Checking portfolio positions and open orders (for coverage / existing shorts)...');
+    try {
+      const portfolio = await client.getPortfolio(accountIdKey);
+      const openOrders = await client.listOrders(accountIdKey, 'OPEN');
+
+      // Best-effort extraction of positions from PortfolioResponse (varies by format)
+      const positions =
+        portfolio?.AccountPortfolio?.[0]?.Position ??
+        portfolio?.AccountPortfolio?.Position ??
+        portfolio?.accountPortfolio?.[0]?.position ??
+        portfolio?.accountPortfolio?.position ??
+        [];
+      const posList = Array.isArray(positions) ? positions : [positions];
+
+      const intcEquityPos = posList.find((p: any) => {
+        const sym = p?.Product?.symbol ?? p?.product?.symbol ?? p?.symbol;
+        const sec = p?.Product?.securityType ?? p?.product?.securityType ?? p?.securityType;
+        return String(sym).toUpperCase() === 'INTC' && String(sec).toUpperCase() !== 'OPTN';
+      });
+      const intcQty =
+        Number(intcEquityPos?.quantity ?? intcEquityPos?.Quantity ?? intcEquityPos?.positionQuantity ?? 0) || 0;
+
+      console.log(`  INTC equity position qty (best-effort): ${intcQty}`);
+      console.log(`  Open orders count: ${openOrders.length}`);
+    } catch (e: any) {
+      console.log('  WARNING: Could not fetch portfolio/orders (continuing).');
+      console.log(`  ${e?.message ?? e}`);
+    }
+    console.log('');
+
     // Step 2: Get valid expiry dates and fetch option chain to select best strike by OI
     console.log('Step 2: Fetching valid INTC option expiry dates...');
     const expireDates = await client.getOptionExpireDates('INTC');
