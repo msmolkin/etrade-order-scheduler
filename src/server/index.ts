@@ -8,9 +8,15 @@ import accountsRouter from './routes/accounts.js';
 import positionsRouter from './routes/positions.js';
 import positionsCushionsRouter from './routes/positions-cushions.js';
 import authRouter from './routes/auth.js';
+import symbolsRouter from './routes/symbols.js';
 import { healthCheck } from './database/client.js';
 
+// Capture shell env before .env so "ETRADE_SANDBOX=false npm run dev" always uses production
+const etradeSandboxFromShell = process.env.ETRADE_SANDBOX;
 dotenv.config();
+if (etradeSandboxFromShell !== undefined) {
+  process.env.ETRADE_SANDBOX = etradeSandboxFromShell;
+}
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -35,6 +41,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/positions', positionsRouter);
 app.use('/api/positions/cushions', positionsCushionsRouter);
+app.use('/api/symbols', symbolsRouter);
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -80,7 +87,13 @@ server.listen(port, () => {
   console.log(`HTTP Server: http://localhost:${port}`);
   console.log(`WebSocket: ws://localhost:${port}/ws`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`E*TRADE Mode: ${process.env.ETRADE_SANDBOX === 'true' ? 'SANDBOX' : 'PRODUCTION'}`);
+  const isSandbox = process.env.ETRADE_SANDBOX === 'true';
+  console.log(
+    `E*TRADE: ${isSandbox ? 'SANDBOX' : 'PRODUCTION'} (ETRADE_SANDBOX=${process.env.ETRADE_SANDBOX ?? 'unset'})`
+  );
+  if (isSandbox) {
+    console.log('  → Using sandbox tokens. For production, set ETRADE_SANDBOX=false in .env or run with ETRADE_SANDBOX=false');
+  }
   console.log('\nEndpoints:');
   console.log('  GET    /health');
   console.log('  GET    /api/auth/status');
@@ -100,6 +113,7 @@ server.listen(port, () => {
   console.log('  GET    /api/orders/expired');
   console.log('  GET    /api/orders/market/options-chain');
   console.log('  GET    /api/orders/market/quote');
+  console.log('  GET    /api/symbols/search');
   console.log('\nPress Ctrl+C to stop\n');
 });
 

@@ -167,6 +167,13 @@ export interface PositionCushion {
   underlyingQuote: UnderlyingQuoteSummary | null;
 }
 
+export interface SymbolSearchResult {
+  symbol: string;
+  companyName: string;
+  exchange: string;
+  securityType: string;
+}
+
 export async function fetchPositionsCushions(
   accountIdKey?: string
 ): Promise<PositionCushion[]> {
@@ -187,4 +194,32 @@ export async function fetchPositionsCushions(
 
   const data = await response.json();
   return data.cushions ?? [];
+}
+
+export async function searchSymbols(query: string): Promise<SymbolSearchResult[]> {
+  const trimmed = query.trim();
+  if (!trimmed || trimmed.length < 2) {
+    return [];
+  }
+
+  const params = new URLSearchParams({ q: trimmed });
+  const response = await fetch(
+    `${API_BASE_URL}/symbols/search?${params.toString()}`
+  );
+
+  if (!response.ok) {
+    let message = 'Failed to search symbols';
+    try {
+      const body = await response.json();
+      if (body?.error && typeof body.error === 'string') {
+        message = body.error;
+      }
+    } catch {
+      // ignore
+    }
+    throw new Error(message);
+  }
+
+  const data = await response.json();
+  return data.results ?? [];
 }

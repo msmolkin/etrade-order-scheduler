@@ -1,5 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { createOrder, fetchAccounts, fetchQuote, type TradingAccount } from '../utils/api';
+import React, { useEffect, useState, useRef } from 'react';
+import {
+  createOrder,
+  fetchAccounts,
+  fetchQuote,
+  searchSymbols,
+  type TradingAccount,
+  type SymbolSearchResult,
+} from '../utils/api';
 
 type OrderFormDraft = Partial<{
   symbol: string;
@@ -67,6 +74,11 @@ export default function OrderForm({ draft }: OrderFormProps) {
   const [accountsError, setAccountsError] = useState('');
   const [autoPricing, setAutoPricing] = useState(false);
   const [autoPricingError, setAutoPricingError] = useState('');
+  const [symbolResults, setSymbolResults] = useState<SymbolSearchResult[]>([]);
+  const [symbolSearchLoading, setSymbolSearchLoading] = useState(false);
+  const [symbolSearchError, setSymbolSearchError] = useState('');
+  const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
+  const symbolInputRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const loadAccounts = async () => {
@@ -124,6 +136,76 @@ export default function OrderForm({ draft }: OrderFormProps) {
       notes: draft.notes ?? prev.notes,
     }));
   }, [draft]);
+
+  // Search for symbols as user types
+  useEffect(() => {
+    const query = formData.symbol.trim();
+
+    if (!query || query.length < 2) {
+      setSymbolResults([]);
+      setShowSymbolDropdown(false);
+      setSymbolSearchError('');
+      setSymbolSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setSymbolSearchLoading(true);
+    setSymbolSearchError('');
+
+    const timeoutId = setTimeout(async () => {
+      try {
+        const results = await searchSymbols(query);
+        if (cancelled) return;
+
+        setSymbolResults(results);
+        setShowSymbolDropdown(results.length > 0);
+      } catch (err: any) {
+        if (cancelled) return;
+        setSymbolResults([]);
+        setShowSymbolDropdown(false);
+        setSymbolSearchError(
+          err.message || 'Failed to search symbols'
+        );
+      } finally {
+        if (!cancelled) {
+          setSymbolSearchLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
+  }, [formData.symbol]);
+
+  const handleSelectSymbol = (result: SymbolSearchResult) => {
+    setFormData((prev) => ({
+      ...prev,
+      symbol: result.symbol.toUpperCase(),
+    }));
+    setShowSymbolDropdown(false);
+  };
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        symbolInputRef.current &&
+        !symbolInputRef.current.contains(event.target as Node)
+      ) {
+        setShowSymbolDropdown(false);
+      }
+    };
+
+    if (showSymbolDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleClickOutside);
+      };
+    }
+  }, [showSymbolDropdown]);
 
   // When using LIMIT orders, automatically set limit price to current bid/ask.
   useEffect(() => {
@@ -302,7 +384,7 @@ export default function OrderForm({ draft }: OrderFormProps) {
             )}
           </div>
 
-          <div>
+          <div className="relative" ref={symbolInputRef}>
             <label className="block text-sm font-medium text-slate-300 mb-2">
               Symbol
             </label>
@@ -310,9 +392,75 @@ export default function OrderForm({ draft }: OrderFormProps) {
               type="text"
               required
               value={formData.symbol}
-              onChange={(e) => setFormData({ ...formData, symbol: e.target.value.toUpperCase() })}
+              onChange={(e) =>
+                setFormData({
+                  ...formData,
+                  symbol: e.target.value.toUpperCase(),
+                })
+              }
+              onFocus={() => {
+                if (symbolResults.length > 0) {
+                  setShowSymbolDropdown(true);
+                }
+              }}
               className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
             />
+            {symbolSearchLoading && (
+              <div className="absolute right-3 top-9 text-xs text-slate-400">
+                Searching...
+              </div>
+            )}
+            {symbolSearchError && (
+              <div className="mt-1 text-xs text-amber-300">
+                {symbolSearchError}
+              </div>
+            )}
+            {showSymbolDropdown && symbolResults.length > 0 && (
+              <div className="absolute z-20 mt-1 w-full max-h-56 overflow-auto rounded-md bg-slate-800 border border-slate-700 shadow-lg">
+                {symbolResults.map((result) => (
+                  <button
+                    key={`${result.symbol}-${result.exchange}-${result.securityType}`}
+                    type="button"
+                    onMouseDown={(e) => {
+                      // Prevent input blur before click fires
+                      e.preventDefault();
+                      handleSelectSymbol(result);
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-700 text-slate-100 flex flex-col"
+                  >
+                    <span className="font-semibold">
+                      {result.symbol}{' '}
+                      {result.exchange && (
+                        <span className="text-xs text-slate-400">
+                          ({result.exchange})
+                        </span>
+                      )}
+                    </span>
+                    {result.companyName && (
+                      <span className="text-xs text-slate-300">
+                        {result.companyName}
+                      </span>
+                    )}
+                    {result.securityType && (
+                      <span className="text-[10px] uppercase text-slate-500 mt-0.5">
+                        {result.securityType}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+            {symbolResults.length > 0 && (
+              <div className="mt-2 px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-sm text-slate-300">
+                <span className="text-slate-400 text-xs mr-2">Symbols:</span>
+                {symbolResults.map((result, index) => (
+                  <span key={`${result.symbol}-${index}`}>
+                    {index > 0 && <span className="text-slate-500">, </span>}
+                    <span className="font-medium">{result.symbol}</span>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

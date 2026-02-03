@@ -51,6 +51,19 @@ export class ETradeClient {
       );
       return config;
     });
+
+    // Turn 401/403 into a clear message so callers can tell the user to re-auth
+    this.httpClient.interceptors.response.use(
+      (res) => res,
+      (err) => {
+        const status = err.response?.status;
+        if (status === 401 || status === 403) {
+          err.message =
+            'E*TRADE session expired or invalid. Re-authenticate via OAuth to get new tokens (e.g. run the OAuth flow and update .env, or use the app’s sign-in).';
+        }
+        return Promise.reject(err);
+      }
+    );
   }
 
   private getAuthHeader(url: string, method: string = 'GET') {
@@ -492,6 +505,41 @@ export class ETradeClient {
     });
 
     return response.data.QuoteResponse.QuoteData;
+  }
+
+  /**
+   * Look up products (symbols) by company name or partial name.
+   * E*TRADE Market "Look Up Product": GET /v1/market/lookup/{search}
+   * Response: LookupResponse with data[] of { symbol, description, type }.
+   * Treats 400/404 from E*TRADE (e.g. "invalid symbol" when searching by ticker) as empty results.
+   */
+  async lookupProduct(search: string): Promise<any[]> {
+    const encoded = encodeURIComponent(search);
+    const url = `${this.baseUrl}/v1/market/lookup/${encoded}`;
+    const headers = this.getAuthHeader(url);
+
+    try {
+      const response = await this.httpClient.get(`/v1/market/lookup/${encoded}`, {
+        headers: headers as any,
+      });
+
+      const wrapper =
+        response.data?.LookupResponse ??
+        response.data?.lookupResponse ??
+        response.data;
+      const data = wrapper?.data ?? wrapper?.Data ?? [];
+      const list = Array.isArray(data) ? data : [data];
+      return list.filter((p: any) => !!p);
+    } catch (err: any) {
+      const status = err.response?.status;
+      const body = err.response?.data;
+      if (status === 400 || status === 404) {
+        return [];
+      }
+      const msg =
+        body?.message ?? body?.ErrorMessage ?? body?.error ?? err.message;
+      throw new Error(msg || 'Symbol lookup failed');
+    }
   }
 
   async getOptionsChain(
