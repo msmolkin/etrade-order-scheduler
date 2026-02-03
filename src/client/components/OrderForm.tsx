@@ -322,19 +322,23 @@ export default function OrderForm({ draft }: OrderFormProps) {
       )}
 
       {accountsError && (
-        <div className="mb-4 p-4 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-200 text-sm">
-          {accountsError}. You can still enter an Account ID manually below.
+        <div className="mb-4 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-200 text-sm">
+          {accountsError}. Enter an Account ID manually below.
         </div>
       )}
 
       {autoPricingError && (
-        <div className="mb-4 p-4 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-100 text-xs">
+        <div className="mb-4 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-100 text-xs">
           {autoPricingError}
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="bg-slate-800 rounded-lg p-6 space-y-4">
-        <div className="grid grid-cols-2 gap-4">
+      <form onSubmit={handleSubmit} className="bg-slate-800 rounded-lg p-6 space-y-6">
+        <section className="space-y-4">
+          <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
+            Account & symbol
+          </h3>
+          <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">
               Account ID
@@ -422,7 +426,6 @@ export default function OrderForm({ draft }: OrderFormProps) {
                     key={`${result.symbol}-${result.exchange}-${result.securityType}`}
                     type="button"
                     onMouseDown={(e) => {
-                      // Prevent input blur before click fires
                       e.preventDefault();
                       handleSelectSymbol(result);
                     }}
@@ -450,20 +453,14 @@ export default function OrderForm({ draft }: OrderFormProps) {
                 ))}
               </div>
             )}
-            {symbolResults.length > 0 && (
-              <div className="mt-2 px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-sm text-slate-300">
-                <span className="text-slate-400 text-xs mr-2">Symbols: </span>
-                {symbolResults.map((result, index) => (
-                  <span key={`${result.symbol}-${index}`}>
-                    {index > 0 && <span className="text-slate-500">, </span>}
-                    <span className="font-medium">{result.symbol}</span>
-                  </span>
-                ))}
-              </div>
-            )}
           </div>
         </div>
+        </section>
 
+        <section className="space-y-4">
+          <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
+            Security & order
+          </h3>
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -573,7 +570,12 @@ export default function OrderForm({ draft }: OrderFormProps) {
             </select>
           </div>
         </div>
+        </section>
 
+        <section className="space-y-4">
+          <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
+            Quantity & price
+          </h3>
         <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -624,7 +626,12 @@ export default function OrderForm({ draft }: OrderFormProps) {
             </div>
           )}
         </div>
+        </section>
 
+        <section className="space-y-4">
+          <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
+            Duration & schedule
+          </h3>
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-slate-300 mb-2">
@@ -704,10 +711,11 @@ export default function OrderForm({ draft }: OrderFormProps) {
             />
           </div>
         )}
+        </section>
 
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-2">
-            Notes (Optional)
+            Notes (optional)
           </label>
           <textarea
             value={formData.notes}

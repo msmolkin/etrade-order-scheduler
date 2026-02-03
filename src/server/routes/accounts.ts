@@ -31,9 +31,16 @@ function getETradeClient(): ETradeClient {
 }
 
 router.get('/', async (req, res) => {
+  const emptyResponse = () =>
+    res.json({ accounts: [], defaultAccountIdKey: null });
+
   try {
     const client = getETradeClient();
     const accounts = await client.getAccounts();
+
+    if (!accounts || !Array.isArray(accounts) || accounts.length === 0) {
+      return emptyResponse();
+    }
 
     const envNickname = process.env.ACCOUNT;
 
@@ -62,7 +69,9 @@ router.get('/', async (req, res) => {
         null,
     });
   } catch (error: any) {
-    res.status(500).json({ error: error.message || 'Failed to load accounts' });
+    // Return empty list so the form still loads; user can enter Account ID manually
+    console.warn('[GET /api/accounts]', error.message || error);
+    return emptyResponse();
   }
 });
 
