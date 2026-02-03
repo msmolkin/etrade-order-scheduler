@@ -16,6 +16,7 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
   const [symbol, setSymbol] = useState('');
   const [expirationDate, setExpirationDate] = useState('');
   const [chainData, setChainData] = useState<any>(null);
+  const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -25,10 +26,12 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
 
     setError('');
     setLoading(true);
+    setChainData(null);
 
     try {
       const data = await fetchOptionsChain(symbol, expirationDate || undefined);
       setChainData(data);
+      setActiveExpiry(expirationDate || null);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch options chain');
       setChainData(null);
@@ -145,10 +148,20 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
       {chainData && (
         <div className="space-y-6">
           <div className="bg-slate-800 rounded-lg p-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-lg font-semibold text-white">{chainData.symbol}</h3>
-              <div className="text-2xl font-bold text-green-400">
-                ${chainData.underlyingPrice?.toFixed(2)}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h3 className="text-lg font-semibold text-white">{chainData.symbol}</h3>
+                {activeExpiry && (
+                  <div className="text-xs text-slate-400 mt-1">
+                    Viewing expiry:{' '}
+                    <span className="font-medium text-slate-200">{activeExpiry}</span>
+                  </div>
+                )}
+              </div>
+              <div className="text-right">
+                <div className="text-2xl font-bold text-green-400">
+                  ${chainData.underlyingPrice?.toFixed(2)}
+                </div>
               </div>
             </div>
           </div>
