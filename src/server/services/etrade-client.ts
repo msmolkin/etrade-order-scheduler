@@ -44,7 +44,11 @@ export class ETradeClient {
 
     // Log requests for debugging
     this.httpClient.interceptors.request.use((config) => {
-      console.log('Axios request:', config.method?.toUpperCase(), config.baseURL + config.url);
+      console.log(
+        'Axios request:',
+        config.method?.toUpperCase(),
+        `${config.baseURL ?? ''}${config.url ?? ''}`
+      );
       return config;
     });
   }
@@ -67,7 +71,7 @@ export class ETradeClient {
     const url = `${this.baseUrl}/v1/accounts/list`;
     const headers = this.getAuthHeader(url);
 
-    const response = await this.httpClient.get('/v1/accounts/list', { headers });
+    const response = await this.httpClient.get('/v1/accounts/list', { headers: headers as any });
     return response.data.AccountListResponse.Accounts.Account;
   }
 
@@ -140,7 +144,7 @@ export class ETradeClient {
       const previewResponse = await this.httpClient.post(
         `/v1/accounts/${request.accountIdKey}/orders/preview`,
         requestBody,
-        { headers: previewHeaders }
+        { headers: previewHeaders as any }
       );
 
       console.log('\n┌─────────────────────────────────────────────────────────────┐');
@@ -436,7 +440,7 @@ export class ETradeClient {
 
     const response = await this.httpClient.get(
       `/v1/accounts/${accountIdKey}/orders/${orderId}`,
-      { headers }
+      { headers: headers as any }
     );
 
     return response.data.OrdersResponse.Order[0];
@@ -451,7 +455,7 @@ export class ETradeClient {
     const headers = this.getAuthHeader(url);
     const response = await this.httpClient.get(
       `/v1/accounts/${accountIdKey}/orders?status=${encodeURIComponent(status)}`,
-      { headers }
+      { headers: headers as any }
     );
     const orders = response.data?.OrdersResponse?.Order ?? response.data?.ordersResponse?.order ?? [];
     return Array.isArray(orders) ? orders : [orders];
@@ -464,7 +468,7 @@ export class ETradeClient {
   async getPortfolio(accountIdKey: string): Promise<any> {
     const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/portfolio`;
     const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(`/v1/accounts/${accountIdKey}/portfolio`, { headers });
+    const response = await this.httpClient.get(`/v1/accounts/${accountIdKey}/portfolio`, { headers: headers as any });
     return response.data?.PortfolioResponse ?? response.data?.portfolioResponse ?? response.data;
   }
 
@@ -475,7 +479,7 @@ export class ETradeClient {
     await this.httpClient.put(
       `/v1/accounts/${accountIdKey}/orders/cancel`,
       { CancelOrderRequest: { orderId } },
-      { headers }
+      { headers: headers as any }
     );
   }
 
@@ -484,7 +488,7 @@ export class ETradeClient {
     const headers = this.getAuthHeader(url);
 
     const response = await this.httpClient.get(`/v1/market/quote/${symbols.join(',')}`, {
-      headers,
+      headers: headers as any,
     });
 
     return response.data.QuoteResponse.QuoteData;
@@ -500,7 +504,7 @@ export class ETradeClient {
     }
 
     const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers });
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers: headers as any });
 
     const chainData = response.data.OptionChainResponse;
 
@@ -522,7 +526,7 @@ export class ETradeClient {
   async getOptionExpireDates(symbol: string): Promise<{ year: number; month: number; day: number }[]> {
     const url = `${this.baseUrl}/v1/market/optionexpiredate?symbol=${symbol}`;
     const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers });
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers: headers as any });
     const data = response.data?.OptionExpireDateResponse || response.data?.optionExpireDateResponse;
     const dates = data?.ExpirationDate ?? data?.expirationDates ?? [];
     const list = Array.isArray(dates) ? dates : [dates];
@@ -563,7 +567,7 @@ export class ETradeClient {
     // Use strikePriceNear to center around current price, and increase noOfStrikes to get more range
     const url = `${this.baseUrl}/v1/market/optionchains?symbol=${symbol}&expiryYear=${expiryYear}&expiryMonth=${monthStr}&expiryDay=${expiryDay}&strikePriceNear=${Math.round(currentPrice)}&noOfStrikes=100`;
     const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers });
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers: headers as any });
     const chain = response.data?.OptionChainResponse || response.data?.optionChainResponse;
     const pairs = chain?.OptionPair || chain?.optionPairs || [];
     return pairs.map((pair: any) => {

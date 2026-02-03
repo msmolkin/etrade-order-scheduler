@@ -207,7 +207,20 @@ async function executeIntcOrder() {
     console.log(`  Quantity: 1 contract`);
     console.log(`  Note: Next we will preview multiple order actions (no placement)\n`);
 
-    // Step 4: Try multiple order actions via PREVIEW ONLY
+    // Step 4: Re-check positions for this specific option (in case you are already short)
+    console.log('Step 4: Checking if you already hold this option (long/short) in the account...');
+    try {
+      const portfolio = await client.getPortfolio(accountIdKey);
+      const blob = JSON.stringify(portfolio);
+      const hasOsiKey = osiKey ? blob.includes(osiKey) : false;
+      console.log(`  Portfolio contains OSI key ${osiKey}: ${hasOsiKey ? 'YES' : 'NO'}`);
+    } catch (e: any) {
+      console.log('  WARNING: Could not re-fetch portfolio for option check.');
+      console.log(`  ${e?.message ?? e}`);
+    }
+    console.log('');
+
+    // Step 5: Try multiple order actions via PREVIEW ONLY
     console.log('Step 4: Previewing multiple option order actions (no placement)...\n');
 
     type Scenario = {
