@@ -108,8 +108,20 @@ export async function fetchQuote(symbols: string[]): Promise<any[]> {
   const params = new URLSearchParams({ symbols: symbols.join(',') });
 
   const response = await fetch(`${API_BASE_URL}/orders/market/quote?${params}`);
-  if (!response.ok) throw new Error('Failed to fetch quote');
-  return response.json();
+  const text = await response.text();
+  try {
+    const data = text ? JSON.parse(text) : [];
+    if (!response.ok) {
+      const msg = data?.error && typeof data.error === 'string' ? data.error : 'Failed to fetch quote';
+      throw new Error(msg);
+    }
+    return Array.isArray(data) ? data : [data];
+  } catch (err: any) {
+    if (err instanceof SyntaxError || err.message?.includes('JSON')) {
+      throw new Error(response.ok ? 'Invalid quote response' : 'Failed to fetch quote');
+    }
+    throw err;
+  }
 }
 
 export interface TradingAccount {
@@ -207,19 +219,22 @@ export async function searchSymbols(query: string): Promise<SymbolSearchResult[]
     `${API_BASE_URL}/symbols/search?${params.toString()}`
   );
 
-  if (!response.ok) {
-    let message = 'Failed to search symbols';
-    try {
-      const body = await response.json();
-      if (body?.error && typeof body.error === 'string') {
-        message = body.error;
-      }
-    } catch {
-      // ignore
+  const text = await response.text();
+  let data: { results?: SymbolSearchResult[]; error?: string };
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    if (!response.ok) {
+      throw new Error('Failed to search symbols');
     }
+    return [];
+  }
+
+  if (!response.ok) {
+    const message =
+      typeof data?.error === 'string' ? data.error : 'Failed to search symbols';
     throw new Error(message);
   }
 
-  const data = await response.json();
   return data.results ?? [];
 }

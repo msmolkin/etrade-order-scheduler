@@ -452,7 +452,7 @@ export default function OrderForm({ draft }: OrderFormProps) {
             )}
             {symbolResults.length > 0 && (
               <div className="mt-2 px-3 py-2 bg-slate-700/50 border border-slate-600 rounded-lg text-sm text-slate-300">
-                <span className="text-slate-400 text-xs mr-2">Symbols:</span>
+                <span className="text-slate-400 text-xs mr-2">Symbols: </span>
                 {symbolResults.map((result, index) => (
                   <span key={`${result.symbol}-${index}`}>
                     {index > 0 && <span className="text-slate-500">, </span>}

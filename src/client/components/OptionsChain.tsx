@@ -12,6 +12,14 @@ interface OptionsChainProps {
   }) => void;
 }
 
+type SelectedLeg = {
+  optionType: 'CALL' | 'PUT';
+  strike: number;
+  leg: any;
+  side: 'BUY' | 'SELL';
+  price: number;
+};
+
 export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainProps) {
   const [symbol, setSymbol] = useState('');
   const [expirationDate, setExpirationDate] = useState('');
@@ -19,6 +27,7 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
   const [activeExpiry, setActiveExpiry] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [selectedLeg, setSelectedLeg] = useState<SelectedLeg | null>(null);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,24 +63,41 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
       .slice(0, 25);
   }, [chainData]);
 
-  const handleCreateFromOption = (
-    optionType: 'CALL' | 'PUT',
-    leg: any,
-    side: 'BUY' | 'SELL',
-    price: number
-  ) => {
-    if (!onCreateOrderFromOption || !chainData?.symbol) return;
-    if (!price || !Number.isFinite(price)) return;
+  const handleLegClick = (optionType: 'CALL' | 'PUT', leg: any, side: 'BUY' | 'SELL', price: number) => {
+    if (!leg || !chainData?.symbol) return;
+    const priceNum = Number(price);
+    if (!Number.isFinite(priceNum)) return;
 
-    onCreateOrderFromOption({
-      symbol: chainData.symbol,
-      optionType,
-      strikePrice: leg.strikePrice,
-      expirationDate: leg.expirationDate,
-      side,
-      price,
+    setSelectedLeg((prev) => {
+      const same = prev?.optionType === optionType && prev?.strike === leg.strikePrice;
+      if (same) return null;
+      return {
+        optionType,
+        strike: leg.strikePrice,
+        leg,
+        side,
+        price: priceNum,
+      };
     });
   };
+
+  const handleCreateOrderFromSelection = () => {
+    if (!selectedLeg || !onCreateOrderFromOption || !chainData?.symbol) return;
+    onCreateOrderFromOption({
+      symbol: chainData.symbol,
+      optionType: selectedLeg.optionType,
+      strikePrice: selectedLeg.strike,
+      expirationDate: selectedLeg.leg.expirationDate,
+      side: selectedLeg.side,
+      price: selectedLeg.price,
+    });
+    setSelectedLeg(null);
+  };
+
+  const isCallSelected = (row: { strike: number; call?: any }) =>
+    selectedLeg?.optionType === 'CALL' && selectedLeg?.strike === row.strike;
+  const isPutSelected = (row: { strike: number; put?: any }) =>
+    selectedLeg?.optionType === 'PUT' && selectedLeg?.strike === row.strike;
 
   const rows = useMemo(() => {
     const byStrike: Record<
@@ -104,7 +130,7 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
   }, [filteredCalls, filteredPuts]);
 
   return (
-    <div>
+    <div className={selectedLeg ? 'pb-24' : ''}>
       <h2 className="text-xl font-semibold text-white mb-6">Options Chain Viewer</h2>
 
       {/* TODO: Add an open interest chart visualization at the top of the options chain view. */}
@@ -211,8 +237,29 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
                       key={row.strike}
                       className="grid grid-cols-1 md:grid-cols-[1fr,auto,1fr] gap-2 md:gap-4 items-stretch bg-slate-900/40 rounded-lg p-3 border border-slate-800"
                     >
-                      {/* Call side (left) */}
-                      <div className="flex flex-col gap-1">
+                      {/* Call side (left) – entire column is clickable */}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() =>
+                          call && handleLegClick('CALL', call, 'SELL', call.bid ?? call.ask ?? 0)
+                        }
+                        onKeyDown={(e) => {
+                          if ((e.key === 'Enter' || e.key === ' ') && call) {
+                            e.preventDefault();
+                            handleLegClick('CALL', call, 'SELL', call.bid ?? call.ask ?? 0);
+                          }
+                        }}
+                        className={`flex flex-col gap-1 rounded-lg p-2 transition-colors cursor-pointer select-none outline-none ${
+                          call
+                            ? 'hover:bg-slate-700/50'
+                            : 'cursor-default opacity-60'
+                        } ${
+                          isCallSelected(row)
+                            ? 'ring-2 ring-red-500 bg-red-500/20 border border-red-500/50'
+                            : ''
+                        }`}
+                      >
                         <div className="flex items-baseline justify-between gap-2">
                           <span className="text-[11px] uppercase tracking-wide text-green-400">
                             Call
@@ -228,31 +275,13 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
                           {call ? `Exp: ${call.expirationDate}` : '—'}
                         </div>
                         {call && (
-                          <div className="mt-1 flex flex-col items-end gap-1">
+                          <div className="mt-1">
                             <div className="text-xs text-green-400 font-semibold">
                               Last {call.last != null ? `$${call.last.toFixed(2)}` : '—'}
                             </div>
-                            <div className="flex flex-wrap gap-1 justify-end">
-                              <button
-                                type="button"
-                                disabled={!call.bid}
-                                onClick={() =>
-                                  handleCreateFromOption('CALL', call, 'SELL', call.bid)
-                                }
-                                className="px-2 py-1 text-[11px] rounded bg-slate-800/80 hover:bg-green-700/70 disabled:opacity-40 text-slate-100 border border-slate-600"
-                              >
-                                Sell Bid {call.bid ? `$${call.bid.toFixed(2)}` : ''}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={!call.ask}
-                                onClick={() =>
-                                  handleCreateFromOption('CALL', call, 'SELL', call.ask)
-                                }
-                                className="px-2 py-1 text-[11px] rounded bg-slate-800/80 hover:bg-green-700/70 disabled:opacity-40 text-slate-100 border border-slate-600"
-                              >
-                                Sell Ask {call.ask ? `$${call.ask.toFixed(2)}` : ''}
-                              </button>
+                            <div className="text-xs text-slate-400">
+                              Bid {call.bid != null ? `$${call.bid.toFixed(2)}` : '—'} / Ask{' '}
+                              {call.ask != null ? `$${call.ask.toFixed(2)}` : '—'}
                             </div>
                           </div>
                         )}
@@ -263,8 +292,29 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
                         <div>${row.strike.toFixed(2)}</div>
                       </div>
 
-                      {/* Put side (right) */}
-                      <div className="flex flex-col gap-1 items-end text-right">
+                      {/* Put side (right) – entire column is clickable */}
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() =>
+                          put && handleLegClick('PUT', put, 'BUY', put.ask ?? put.bid ?? 0)
+                        }
+                        onKeyDown={(e) => {
+                          if ((e.key === 'Enter' || e.key === ' ') && put) {
+                            e.preventDefault();
+                            handleLegClick('PUT', put, 'BUY', put.ask ?? put.bid ?? 0);
+                          }
+                        }}
+                        className={`flex flex-col gap-1 items-end text-right rounded-lg p-2 transition-colors cursor-pointer select-none outline-none ${
+                          put
+                            ? 'hover:bg-slate-700/50'
+                            : 'cursor-default opacity-60'
+                        } ${
+                          isPutSelected(row)
+                            ? 'ring-2 ring-red-500 bg-red-500/20 border border-red-500/50'
+                            : ''
+                        }`}
+                      >
                         <div className="flex items-baseline justify-between gap-2 w-full">
                           <span className="text-xs text-slate-400">
                             OI:{' '}
@@ -280,31 +330,13 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
                           {put ? `Exp: ${put.expirationDate}` : '—'}
                         </div>
                         {put && (
-                          <div className="mt-1 flex flex-col items-end gap-1">
+                          <div className="mt-1 text-right">
                             <div className="text-xs text-red-400 font-semibold">
                               Last {put.last != null ? `$${put.last.toFixed(2)}` : '—'}
                             </div>
-                            <div className="flex flex-wrap gap-1 justify-end">
-                              <button
-                                type="button"
-                                disabled={!put.bid}
-                                onClick={() =>
-                                  handleCreateFromOption('PUT', put, 'BUY', put.bid)
-                                }
-                                className="px-2 py-1 text-[11px] rounded bg-slate-800/80 hover:bg-red-700/70 disabled:opacity-40 text-slate-100 border border-slate-600"
-                              >
-                                Buy Bid {put.bid ? `$${put.bid.toFixed(2)}` : ''}
-                              </button>
-                              <button
-                                type="button"
-                                disabled={!put.ask}
-                                onClick={() =>
-                                  handleCreateFromOption('PUT', put, 'BUY', put.ask)
-                                }
-                                className="px-2 py-1 text-[11px] rounded bg-slate-800/80 hover:bg-red-700/70 disabled:opacity-40 text-slate-100 border border-slate-600"
-                              >
-                                Buy Ask {put.ask ? `$${put.ask.toFixed(2)}` : ''}
-                              </button>
+                            <div className="text-xs text-slate-400">
+                              Bid {put.bid != null ? `$${put.bid.toFixed(2)}` : '—'} / Ask{' '}
+                              {put.ask != null ? `$${put.ask.toFixed(2)}` : '—'}
                             </div>
                           </div>
                         )}
@@ -314,6 +346,45 @@ export default function OptionsChain({ onCreateOrderFromOption }: OptionsChainPr
                 })}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Create order panel – fixed at bottom when a leg is selected */}
+      {selectedLeg && chainData?.symbol && (
+        <div
+          className="fixed bottom-0 left-0 right-0 z-50 bg-slate-800 border-t border-slate-600 shadow-lg"
+          aria-label="Create order from selection"
+        >
+          <div className="container mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-4">
+            <div className="text-slate-200">
+              <span className="font-semibold text-white">
+                {chainData.symbol} {selectedLeg.optionType} ${selectedLeg.strike.toFixed(2)}
+              </span>
+              <span className="text-slate-400 mx-2">·</span>
+              <span className="text-slate-400">
+                {selectedLeg.side} @ ${selectedLeg.price.toFixed(2)}
+              </span>
+              <span className="text-slate-500 text-sm ml-2">
+                Exp: {selectedLeg.leg.expirationDate}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setSelectedLeg(null)}
+                className="px-4 py-2 text-slate-400 hover:text-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateOrderFromSelection}
+                className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+              >
+                Create order
+              </button>
+            </div>
           </div>
         </div>
       )}
