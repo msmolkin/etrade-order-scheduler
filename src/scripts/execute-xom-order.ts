@@ -77,13 +77,16 @@ async function executeXomOrder() {
       console.log(`      Status: ${account.accountStatus}\n`);
     });
 
-    // Use the first active account
-    const activeAccount = accounts.find(acc => acc.accountStatus === 'ACTIVE');
-    if (!activeAccount) {
+    const accountNickname = process.env.ACCOUNT;
+    const activeAccounts = accounts.filter((acc: any) => acc.accountStatus === 'ACTIVE');
+    if (!activeAccounts.length) {
       console.error('ERROR: No active accounts found');
       process.exit(1);
     }
-
+    const matchingAccount = accountNickname
+      ? activeAccounts.find((acc: any) => acc.accountId.endsWith(accountNickname))
+      : activeAccounts.find((acc: any) => acc.accountId.endsWith('[REDACTED]'));
+    const activeAccount = matchingAccount ?? activeAccounts[0];
     const accountIdKey = activeAccount.accountIdKey;
     console.log(`Using account: ${activeAccount.accountName || activeAccount.accountDesc}`);
     console.log(`Account Key: ${accountIdKey}\n`);
@@ -101,17 +104,23 @@ async function executeXomOrder() {
     console.log(`  Quantity: 1 contract`);
     console.log(`  Limit Price: $55.00 per share\n`);
 
+    // E*TRADE option preview expects underlying symbol + callPut + expiry + strike (not full option symbol).
     const orderRequest = {
       accountIdKey: accountIdKey,
-      symbol: optionSymbol,
+      symbol: 'XOM',
       securityType: 'OPTN' as const,
-      orderAction: 'SELL' as const,
+      callPut: 'CALL' as const,
+      expiryYear: 2026,
+      expiryMonth: 1,
+      expiryDay: 30,
+      strikePrice: 140,
+      orderAction: 'SELL_OPEN' as const,
       priceType: 'LIMIT' as const,
       quantity: 1,
       limitPrice: 55.00,
       orderTerm: 'GOOD_FOR_DAY' as const,
       marketSession: 'REGULAR' as const,
-      clientOrderId: `xom-call-sell-${Date.now()}`,
+      clientOrderId: `xom${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
     };
 
     // Step 3: Place the order

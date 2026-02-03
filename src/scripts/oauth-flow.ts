@@ -216,7 +216,36 @@ function updateEnvFile(accessToken: string, accessTokenSecret: string, isSandbox
   fs.writeFileSync(envPath, envContent);
 }
 
+const REQUEST_TOKEN_FILE = path.join(process.cwd(), '.oauth_request_token.json');
+
 async function main() {
+  const phase = process.env.ETRADE_OAUTH_PHASE;
+  const verifierFromEnv = process.env.ETRADE_VERIFIER;
+  const saveTokens = process.env.ETRADE_SAVE_TOKENS === 'y' || process.env.ETRADE_SAVE_TOKENS === 'yes';
+
+  // Phase 2: complete with verifier from env (non-interactive)
+  if (phase === '2' && verifierFromEnv) {
+    try {
+      const raw = fs.readFileSync(REQUEST_TOKEN_FILE, 'utf-8');
+      const { token: requestToken, tokenSecret: requestTokenSecret, isSandbox } = JSON.parse(raw);
+      const { accessToken, accessTokenSecret } = await getAccessToken(
+        requestToken,
+        requestTokenSecret,
+        verifierFromEnv.trim()
+      );
+      updateEnvFile(accessToken, accessTokenSecret, isSandbox);
+      fs.unlinkSync(REQUEST_TOKEN_FILE);
+      console.log('✓ Tokens saved to .env file');
+      console.log('OAuth setup complete.');
+      process.exit(0);
+    } catch (error: any) {
+      console.error('Error completing OAuth:', error.response?.data || error.message);
+      process.exit(1);
+    }
+    return;
+  }
+
+  // Phase 1 or interactive: get request token, show URL
   console.log('=================================');
   console.log('E*TRADE OAuth Token Acquisition');
   console.log('=================================');
@@ -225,37 +254,44 @@ async function main() {
   console.log(`API URL: ${API_URL}`);
 
   try {
-    // Step 1: Get request token
     const { token: requestToken, tokenSecret: requestTokenSecret } = await getRequestToken();
     console.log('✓ Got request token');
 
-    // Step 2: Display authorization URL
     const authUrl = getAuthorizationUrl(requestToken);
     console.log('\n2. Please visit this URL to authorize the application:');
     console.log('\n' + authUrl + '\n');
     console.log('After authorizing, E*TRADE will display a verification code.');
 
-    // Step 3: Get verifier from user
-    const verifier = await prompt('\n3. Enter the verification code: ');
+    // Phase 1 only: save request token and exit so verifier can be used in phase 2
+    if (phase === '1') {
+      fs.writeFileSync(
+        REQUEST_TOKEN_FILE,
+        JSON.stringify({
+          token: requestToken,
+          tokenSecret: requestTokenSecret,
+          isSandbox: SANDBOX,
+        })
+      );
+      console.log('\nRequest token saved. Run with ETRADE_OAUTH_PHASE=2 ETRADE_VERIFIER=<code> ETRADE_SAVE_TOKENS=y to complete.');
+      process.exit(0);
+      return;
+    }
 
+    const verifier = verifierFromEnv || (await prompt('\n3. Enter the verification code: '));
     if (!verifier) {
       console.error('Error: Verification code is required');
       process.exit(1);
     }
 
-    // Step 4: Exchange verifier for access token
     const { accessToken, accessTokenSecret } = await getAccessToken(
       requestToken,
       requestTokenSecret,
-      verifier
+      verifier.trim()
     );
-
     console.log('\n✓ Successfully obtained access tokens!\n');
 
-    // Step 5: Save to .env or display
-    const shouldSave = await prompt('Save tokens to .env file? (Y/n): ');
-
-    if (shouldSave.toLowerCase() === 'y' || shouldSave.toLowerCase() === '') {
+    const shouldSave = saveTokens || (await prompt('Save tokens to .env file? (Y/n): '));
+    if (shouldSave === true || (typeof shouldSave === 'string' && shouldSave.toLowerCase() !== 'n')) {
       updateEnvFile(accessToken, accessTokenSecret, SANDBOX);
       console.log('\n✓ Tokens saved to .env file');
       console.log('\nRestart your server to use the new tokens.');

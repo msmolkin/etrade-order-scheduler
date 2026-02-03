@@ -79,6 +79,22 @@ export class ETradeClient {
 
     // Build order details, only including optional price fields when they have values
     const securityType = request.securityType || 'EQ'; // Default to EQ for backward compatibility
+    // E*TRADE doc: OPTN Product = underlying symbol + callPut + expiryYear/Month/Day + strikePrice.
+    // Use zero-padded expiry month/day strings to match doc (e.g. "01", "30").
+    const optnProduct: Record<string, any> =
+      securityType === 'OPTN'
+        ? {
+            securityType: 'OPTN',
+            symbol: request.symbol,
+            ...(request.callPut && { callPut: request.callPut }),
+            ...(request.expiryYear != null && {
+              expiryYear: request.expiryYear,
+              expiryMonth: String(request.expiryMonth!).padStart(2, '0'),
+              expiryDay: String(request.expiryDay!).padStart(2, '0'),
+              ...(request.strikePrice != null && { strikePrice: request.strikePrice }),
+            }),
+          }
+        : { securityType, symbol: request.symbol };
     const orderDetails: Record<string, any> = {
       allOrNone: request.allOrNone || false,
       priceType: request.priceType,
@@ -86,10 +102,7 @@ export class ETradeClient {
       marketSession: request.marketSession,
       Instrument: [
         {
-          Product: {
-            securityType: securityType,
-            symbol: request.symbol,
-          },
+          Product: optnProduct,
           orderAction: request.orderAction,
           quantityType: 'QUANTITY',
           quantity: request.quantity,
@@ -219,6 +232,13 @@ export class ETradeClient {
           Product: {
             securityType: securityType,
             symbol: request.symbol,
+            ...(securityType === 'OPTN' && request.callPut && { callPut: request.callPut }),
+            ...(securityType === 'OPTN' && request.expiryYear != null && {
+              expiryYear: request.expiryYear,
+              expiryMonth: request.expiryMonth,
+              expiryDay: request.expiryDay,
+              strikePrice: request.strikePrice,
+            }),
           },
           orderAction: request.orderAction,
           quantityType: 'QUANTITY',

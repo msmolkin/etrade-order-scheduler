@@ -21,7 +21,7 @@ export interface ETradeOrderRequest {
   accountIdKey: string;
   symbol: string;
   securityType?: 'EQ' | 'OPTN'; // EQ for equities, OPTN for options
-  orderAction: 'BUY' | 'SELL' | 'BUY_TO_COVER' | 'SELL_SHORT';
+  orderAction: 'BUY' | 'SELL' | 'BUY_TO_COVER' | 'SELL_SHORT' | 'BUY_OPEN' | 'BUY_CLOSE' | 'SELL_OPEN' | 'SELL_CLOSE';
   clientOrderId: string;
   priceType: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT';
   quantity: number;
@@ -30,6 +30,13 @@ export interface ETradeOrderRequest {
   stopPrice?: number;
   limitPrice?: number;
   allOrNone?: boolean;
+  /** Required for options: 'CALL' or 'PUT' */
+  callPut?: 'CALL' | 'PUT';
+  /** Required for options: expiry and strike */
+  expiryYear?: number;
+  expiryMonth?: number;
+  expiryDay?: number;
+  strikePrice?: number;
 }
 
 export interface ETradeOrderResponse {

@@ -181,9 +181,9 @@ async function buyApple() {
       priceType: 'LIMIT' as const,
       quantity: 1,
       limitPrice: 10.00,
-      orderTerm: 'GOOD_FOR_DAY' as const,
+      orderTerm: 'GOOD_UNTIL_CANCEL' as const,
       marketSession: 'REGULAR' as const,
-      clientOrderId: `aapl-buy-${Date.now()}`,
+      clientOrderId: `aapl${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
     };
 
     console.log('  ┌─────────────────────────────────────┐');
@@ -194,7 +194,7 @@ async function buyApple() {
     console.log(`  │  Quantity:      1 share             │`);
     console.log(`  │  Price Type:    LIMIT               │`);
     console.log(`  │  Limit Price:   $10.00              │`);
-    console.log(`  │  Order Term:    GOOD_FOR_DAY        │`);
+    console.log(`  │  Order Term:    GOOD_UNTIL_CANCEL   │`);
     console.log(`  │  Session:       REGULAR             │`);
     console.log('  └─────────────────────────────────────┘');
     
