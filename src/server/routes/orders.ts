@@ -60,10 +60,14 @@ router.get('/', async (req, res) => {
   try {
     const { accountId, status, scheduleEnabled, limit } = req.query;
 
+    // If scheduleEnabled is not provided, do NOT filter by it.
+    const scheduleEnabledFilter =
+      scheduleEnabled === undefined ? undefined : scheduleEnabled === 'true';
+
     const orders = await orderService.getOrders({
       accountId: accountId as string,
       status: status as any,
-      scheduleEnabled: scheduleEnabled === 'true',
+      scheduleEnabled: scheduleEnabledFilter,
       limit: limit ? parseInt(limit as string) : undefined,
     });
 
