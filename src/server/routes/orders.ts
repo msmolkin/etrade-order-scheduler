@@ -132,7 +132,10 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Quantity must be a positive integer' });
     }
 
-    const orderData: Omit<Order, 'id' | 'createdAt' | 'updatedAt'> = {
+    const orderData: Omit<
+      Order,
+      'id' | 'createdAt' | 'updatedAt' | 'status' | 'requiresDaily' | 'retryCount' | 'maxRetries'
+    > = {
       ...raw,
       accountId: String(raw.accountId),
       symbol: String(raw.symbol),
@@ -196,10 +199,12 @@ router.post('/:id/resend', async (req, res) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
+    const { id: _id, createdAt: _createdAt, updatedAt: _updatedAt, ...baseOrder } =
+      existingOrder;
+
     // Create a new order based on the expired one
     const newOrder = await orderService.createOrder({
-      ...existingOrder,
-      id: undefined as any,
+      ...baseOrder,
       status: existingOrder.scheduleEnabled ? 'SCHEDULED' : 'PENDING',
       etradeOrderId: undefined,
       submittedAt: undefined,
