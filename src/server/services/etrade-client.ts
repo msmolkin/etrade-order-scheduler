@@ -15,9 +15,12 @@ export class ETradeClient {
   private credentials: ETradeCredentials;
   private baseUrl: string;
   private httpClient: AxiosInstance;
+  private debugHttp: boolean;
 
   constructor(credentials: ETradeCredentials, sandbox: boolean = false) {
     this.credentials = credentials;
+    // Keep logs low-noise by default; set ETRADE_HTTP_DEBUG=true for verbose request/response dumps.
+    this.debugHttp = process.env.ETRADE_HTTP_DEBUG === 'true';
     this.baseUrl = sandbox
       ? 'https://apisb.etrade.com'
       : 'https://api.etrade.com';
@@ -42,15 +45,17 @@ export class ETradeClient {
       },
     });
 
-    // Log requests for debugging
-    this.httpClient.interceptors.request.use((config) => {
-      console.log(
-        'Axios request:',
-        config.method?.toUpperCase(),
-        `${config.baseURL ?? ''}${config.url ?? ''}`
-      );
-      return config;
-    });
+    // Log requests only when explicitly enabled.
+    if (this.debugHttp) {
+      this.httpClient.interceptors.request.use((config) => {
+        console.log(
+          'Axios request:',
+          config.method?.toUpperCase(),
+          `${config.baseURL ?? ''}${config.url ?? ''}`
+        );
+        return config;
+      });
+    }
 
     // Turn 401/403 into a clear message so callers can tell the user to re-auth
     this.httpClient.interceptors.response.use(
@@ -94,7 +99,7 @@ export class ETradeClient {
    */
   async previewOrder(request: ETradeOrderRequest): Promise<any> {
     const previewUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/preview`;
-    console.log('Calling preview URL:', previewUrl);
+    if (this.debugHttp) console.log('Calling preview URL:', previewUrl);
     const previewHeaders = this.getAuthHeader(previewUrl, 'POST');
 
     const securityType = request.securityType || 'EQ';
@@ -144,15 +149,17 @@ export class ETradeClient {
 
     try {
       const requestBody = { PreviewOrderRequest: orderPayload };
-      console.log('\n┌─────────────────────────────────────────────────────────────┐');
-      console.log('│  ORDER PREVIEW REQUEST                                      │');
-      console.log('└─────────────────────────────────────────────────────────────┘');
-      console.log('1) API URL:');
-      console.log(`   ${previewUrl}`);
-      console.log('\n2) Request Headers:');
-      console.log(JSON.stringify(previewHeaders, null, 2));
-      console.log('\n3) Request Body:');
-      console.log(JSON.stringify(requestBody, null, 2));
+      if (this.debugHttp) {
+        console.log('\n┌─────────────────────────────────────────────────────────────┐');
+        console.log('│  ORDER PREVIEW REQUEST                                      │');
+        console.log('└─────────────────────────────────────────────────────────────┘');
+        console.log('1) API URL:');
+        console.log(`   ${previewUrl}`);
+        console.log('\n2) Request Headers:');
+        console.log(JSON.stringify(previewHeaders, null, 2));
+        console.log('\n3) Request Body:');
+        console.log(JSON.stringify(requestBody, null, 2));
+      }
 
       const previewResponse = await this.httpClient.post(
         `/v1/accounts/${request.accountIdKey}/orders/preview`,
@@ -160,42 +167,52 @@ export class ETradeClient {
         { headers: previewHeaders as any }
       );
 
-      console.log('\n┌─────────────────────────────────────────────────────────────┐');
-      console.log('│  ORDER PREVIEW RESPONSE                                     │');
-      console.log('└─────────────────────────────────────────────────────────────┘');
-      console.log('4) Response Headers:');
-      const responseHeaders = previewResponse.headers || {};
-      console.log(JSON.stringify(responseHeaders, null, 2));
-      if (responseHeaders['x-et-trace']) {
-        console.log(`\nX-ET-Trace: ${responseHeaders['x-et-trace']}`);
+      if (this.debugHttp) {
+        console.log('\n┌─────────────────────────────────────────────────────────────┐');
+        console.log('│  ORDER PREVIEW RESPONSE                                     │');
+        console.log('└─────────────────────────────────────────────────────────────┘');
+        console.log('4) Response Headers:');
       }
-      console.log('\n5) Response Body:');
-      console.log(JSON.stringify(previewResponse.data, null, 2));
+      const responseHeaders = previewResponse.headers || {};
+      if (this.debugHttp) console.log(JSON.stringify(responseHeaders, null, 2));
+      if (responseHeaders['x-et-trace']) {
+        if (this.debugHttp) console.log(`\nX-ET-Trace: ${responseHeaders['x-et-trace']}`);
+      }
+      if (this.debugHttp) {
+        console.log('\n5) Response Body:');
+        console.log(JSON.stringify(previewResponse.data, null, 2));
+      }
 
       return previewResponse.data.PreviewOrderResponse;
     } catch (error: any) {
-      console.log('\n┌─────────────────────────────────────────────────────────────┐');
-      console.log('│  ORDER PREVIEW ERROR                                        │');
-      console.log('└─────────────────────────────────────────────────────────────┘');
-      console.log('1) API URL:');
-      console.log(`   ${previewUrl}`);
-      console.log('\n2) Request Headers:');
-      console.log(JSON.stringify(previewHeaders, null, 2));
-      console.log('\n3) Request Body:');
-      console.log(JSON.stringify({ PreviewOrderRequest: orderPayload }, null, 2));
+      if (this.debugHttp) {
+        console.log('\n┌─────────────────────────────────────────────────────────────┐');
+        console.log('│  ORDER PREVIEW ERROR                                        │');
+        console.log('└─────────────────────────────────────────────────────────────┘');
+        console.log('1) API URL:');
+        console.log(`   ${previewUrl}`);
+        console.log('\n2) Request Headers:');
+        console.log(JSON.stringify(previewHeaders, null, 2));
+        console.log('\n3) Request Body:');
+        console.log(JSON.stringify({ PreviewOrderRequest: orderPayload }, null, 2));
+      }
 
       if (error.response) {
-        console.log('\n4) Response Status:', error.response.status);
-        console.log('5) Response Headers:');
-        const errorResponseHeaders = error.response.headers || {};
-        console.log(JSON.stringify(errorResponseHeaders, null, 2));
-        if (errorResponseHeaders['x-et-trace']) {
-          console.log(`\nX-ET-Trace: ${errorResponseHeaders['x-et-trace']}`);
+        if (this.debugHttp) {
+          console.log('\n4) Response Status:', error.response.status);
+          console.log('5) Response Headers:');
         }
-        console.log('\n6) Response Body:');
-        console.log(JSON.stringify(error.response.data, null, 2));
+        const errorResponseHeaders = error.response.headers || {};
+        if (this.debugHttp) console.log(JSON.stringify(errorResponseHeaders, null, 2));
+        if (errorResponseHeaders['x-et-trace']) {
+          if (this.debugHttp) console.log(`\nX-ET-Trace: ${errorResponseHeaders['x-et-trace']}`);
+        }
+        if (this.debugHttp) {
+          console.log('\n6) Response Body:');
+          console.log(JSON.stringify(error.response.data, null, 2));
+        }
       } else {
-        console.log('\n4) Error (no response):', error.message);
+        if (this.debugHttp) console.log('\n4) Error (no response):', error.message);
       }
 
       throw error;

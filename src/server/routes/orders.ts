@@ -173,6 +173,9 @@ router.post('/', async (req, res) => {
       maxRetries: Number(raw.maxRetries) || 3,
     });
 
+    console.log(
+      `[POST /api/orders] created ${order.id} ${order.symbol} ${order.status} scheduleEnabled=${order.scheduleEnabled}`
+    );
     broadcastOrderUpdate(order);
     res.status(201).json(order);
   } catch (error: any) {

@@ -26,7 +26,13 @@ export class OrderExecutor {
 
       // Prepare E*TRADE order request
       const etradeRequest = this.mapToETradeRequest(order);
-      console.log('E*TRADE request:', JSON.stringify(etradeRequest, null, 2));
+      if (process.env.ORDER_EXECUTOR_DEBUG === 'true') {
+        console.log('E*TRADE request:', JSON.stringify(etradeRequest, null, 2));
+      } else {
+        console.log(
+          `E*TRADE placeOrder: ${order.symbol} ${order.action} qty=${order.quantity} term=${etradeRequest.orderTerm} session=${etradeRequest.marketSession}`
+        );
+      }
 
       // Place order with E*TRADE
       const response = await this.etradeClient.placeOrder(etradeRequest);
