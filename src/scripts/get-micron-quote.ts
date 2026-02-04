@@ -2,7 +2,7 @@ import { ETradeClient } from '../server/services/etrade-client.js';
 import type { ETradeCredentials } from '../shared/types/index.js';
 import dotenv from 'dotenv';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const DEFAULT_STREAM_SECONDS = 5;
 
@@ -20,9 +20,14 @@ function parseHide(): boolean {
   return args.includes('--hide');
 }
 
+function parseShowDividendInfo(): boolean {
+  return args.includes('-d') || args.includes('--show-dividend-info');
+}
+
 async function getMicronQuote() {
   const streamSeconds = parseStreamSeconds();
   const minimal = parseHide();
+  const showDividendInfo = parseShowDividendInfo();
 
   if (!minimal) {
     console.log('╔════════════════════════════════════════════════════════════╗');
@@ -142,22 +147,24 @@ async function getMicronQuote() {
       console.log('\n');
     }
 
-    // Ex-dividend date (if dividend exists)
-    const exDividendDate = quoteData.exDividendDate;
-    const dividend = quoteData.dividend;
-    if (dividend && dividend > 0 && exDividendDate && exDividendDate > 0) {
-      const exDivDate = new Date(exDividendDate * 1000);
-      const formattedDate = minimal
-        ? exDivDate.toLocaleDateString()
-        : exDivDate.toLocaleDateString('en-US', {
-            weekday: 'long',
-            year: 'numeric',
-            month: 'long',
-            day: 'numeric'
-          });
-      console.log(`Ex-dividend date: ${formattedDate}`);
+    // Ex-dividend date (only when -d / --show-dividend-info)
+    if (showDividendInfo) {
+      const exDividendDate = quoteData.exDividendDate;
+      const dividend = quoteData.dividend;
+      if (dividend && dividend > 0 && exDividendDate && exDividendDate > 0) {
+        const exDivDate = new Date(exDividendDate * 1000);
+        const formattedDate = minimal
+          ? exDivDate.toLocaleDateString()
+          : exDivDate.toLocaleDateString('en-US', {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            });
+        console.log(`Ex-dividend date: ${formattedDate}`);
+      }
+      if (!minimal) console.log('');
     }
-    if (!minimal) console.log('');
 
     // Stream live data
     if (!minimal) {
