@@ -513,6 +513,47 @@ export class ETradeClient {
     );
   }
 
+  /**
+   * Get quote data for one or more symbols.
+   * E*TRADE Market "Get Quote": GET /v1/market/quote/{symbols}
+   * 
+   * **Important:** The E*TRADE API returns quote data in a nested structure.
+   * The actual market data fields are nested inside an `All` object:
+   * 
+   * ```typescript
+   * {
+   *   dateTime: "...",
+   *   quoteStatus: "REALTIME",
+   *   All: {
+   *     bid: 233.01,
+   *     ask: 233.03,
+   *     bidSize: 100,
+   *     askSize: 100,
+   *     lastTrade: 233.02,        // Note: "lastTrade", not "last"
+   *     totalVolume: 27046356,    // Note: "totalVolume", not "volume"
+   *     changeClose: -5.6,        // Note: "changeClose", not "change"
+   *     changeClosePercentage: -2.35, // Note: "changeClosePercentage", not "changePct"
+   *     high: 238.86,
+   *     low: 231.97,
+   *     open: 238.86,
+   *     previousClose: 238.62,   // Note: "previousClose", not "close"
+   *     // ... other fields
+   *   }
+   * }
+   * ```
+   * 
+   * When using this method, access market data via `quote.All`:
+   * ```typescript
+   * const quotes = await client.getQuote(['AMZN']);
+   * const quoteData = quotes[0].All || quotes[0]; // Fallback for compatibility
+   * const bid = quoteData.bid;
+   * const ask = quoteData.ask;
+   * const lastPrice = quoteData.lastTrade || quoteData.previousClose;
+   * ```
+   * 
+   * @param symbols Array of symbol strings (e.g., ['AAPL', 'MSFT'])
+   * @returns Array of quote objects (raw API response structure)
+   */
   async getQuote(symbols: string[]): Promise<ETradeQuote[]> {
     const url = `${this.baseUrl}/v1/market/quote/${symbols.join(',')}`;
     const headers = this.getAuthHeader(url);

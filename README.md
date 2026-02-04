@@ -261,6 +261,47 @@ aws events put-targets \
 - `GET /api/orders/market/options-chain?symbol=AAPL` - Get options chain
 - `GET /api/orders/market/quote?symbols=AAPL,MSFT` - Get quotes
 
+#### Quote Response Structure
+
+The E*TRADE quote API returns data in a nested structure. Market data fields are located inside an `All` object:
+
+```json
+{
+  "dateTime": "13:38:49 EST 02-04-2026",
+  "quoteStatus": "REALTIME",
+  "All": {
+    "bid": 233.01,
+    "ask": 233.03,
+    "bidSize": 100,
+    "askSize": 100,
+    "lastTrade": 233.02,
+    "totalVolume": 27046356,
+    "changeClose": -5.6,
+    "changeClosePercentage": -2.35,
+    "high": 238.86,
+    "low": 231.97,
+    "open": 238.86,
+    "previousClose": 238.62
+  }
+}
+```
+
+**Important field name mappings:**
+- `lastTrade` → last price (not `last`)
+- `totalVolume` → volume (not `volume`)
+- `changeClose` → change amount (not `change`)
+- `changeClosePercentage` → change percentage (not `changePct`)
+- `previousClose` → close price (not `close`)
+
+When accessing quote data in your code:
+```typescript
+const quotes = await client.getQuote(['AMZN']);
+const quoteData = quotes[0].All || quotes[0]; // Fallback for compatibility
+const bid = quoteData.bid;
+const ask = quoteData.ask;
+const lastPrice = quoteData.lastTrade || quoteData.previousClose;
+```
+
 ### Health
 - `GET /health` - Server and database health check
 

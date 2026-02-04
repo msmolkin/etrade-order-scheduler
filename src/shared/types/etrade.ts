@@ -58,6 +58,42 @@ export interface ETradeOrderResponse {
   }[];
 }
 
+/**
+ * Idealized quote interface for type safety.
+ * 
+ * **Note:** The actual E*TRADE API response has a different structure.
+ * The real response nests market data inside an `All` object with different field names:
+ * 
+ * ```typescript
+ * {
+ *   dateTime: string,
+ *   quoteStatus: string,
+ *   All: {
+ *     bid: number,
+ *     ask: number,
+ *     bidSize: number,
+ *     askSize: number,
+ *     lastTrade: number,        // Not "last"
+ *     totalVolume: number,      // Not "volume"
+ *     changeClose: number,      // Not "change"
+ *     changeClosePercentage: number, // Not "changePct"
+ *     high: number,
+ *     low: number,
+ *     open: number,
+ *     previousClose: number,    // Not "close"
+ *     // ... other fields
+ *   }
+ * }
+ * ```
+ * 
+ * When working with quote data from `ETradeClient.getQuote()`, access fields via `quote.All`:
+ * ```typescript
+ * const quotes = await client.getQuote(['AMZN']);
+ * const quoteData = quotes[0].All || quotes[0];
+ * const bid = quoteData.bid;
+ * const lastPrice = quoteData.lastTrade || quoteData.previousClose;
+ * ```
+ */
 export interface ETradeQuote {
   symbol: string;
   bid: number;

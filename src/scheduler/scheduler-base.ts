@@ -3,6 +3,7 @@ import { OrderService } from '../server/services/order-service.js';
 import { OrderExecutor } from '../server/services/order-executor.js';
 import { ETradeClient } from '../server/services/etrade-client.js';
 import type { SessionTime, Order } from '../shared/types/index.js';
+import { log as schedulerLog, error as schedulerError } from './logger.js';
 
 export abstract class SchedulerBase {
   protected schedulerId: string;
@@ -30,7 +31,7 @@ export abstract class SchedulerBase {
 
   protected async processScheduledOrders(sessionTime: SessionTime): Promise<void> {
     const startTime = Date.now();
-    console.log(`[${this.schedulerId}] Processing ${sessionTime} orders...`);
+    schedulerLog(`[${this.schedulerId}] Processing ${sessionTime} orders...`);
 
     try {
       // Clean up any expired locks first
@@ -39,22 +40,21 @@ export abstract class SchedulerBase {
       // Get orders scheduled for this time
       const orders = await this.orderService.getScheduledOrders(new Date(), sessionTime);
 
-      console.log(`[${this.schedulerId}] Found ${orders.length} orders to execute`);
+      schedulerLog(`[${this.schedulerId}] Found ${orders.length} orders to execute`);
 
       // Execute orders in parallel with concurrency limit
       const results = await this.executeBatch(orders, 5);
 
       const successful = results.filter((r) => r).length;
       const failed = results.length - successful;
-
-      console.log(
-        `[${this.schedulerId}] Execution complete: ${successful} successful, ${failed} failed (${Date.now() - startTime}ms)`
-      );
+      const elapsed = Date.now() - startTime;
+      schedulerLog(`[${this.schedulerId}] Execution complete: ${successful} successful, ${failed} failed (${elapsed}ms)`);
 
       // For orders that require daily placement, reschedule them
       await this.rescheduleRecurringOrders(orders.filter((o) => o.requiresDaily));
     } catch (error: any) {
-      console.error(`[${this.schedulerId}] Error processing scheduled orders:`, error.message);
+      const errMsg = `[${this.schedulerId}] Error processing scheduled orders: ${error?.message ?? error}`;
+      schedulerError(errMsg, error);
     }
   }
 
@@ -63,7 +63,12 @@ export abstract class SchedulerBase {
     const executing: Promise<boolean>[] = [];
 
     for (const order of orders) {
-      const promise = this.orderExecutor.executeOrder(order, this.schedulerId);
+      // Wrap executeOrder to ensure it always resolves (never rejects)
+      const promise = this.orderExecutor.executeOrder(order, this.schedulerId)
+        .catch((error: any) => {
+          schedulerError(`executeBatch: order ${order.id} threw unhandled error: ${error?.message ?? error}`, error);
+          return false; // Treat unhandled errors as failure
+        });
       executing.push(promise);
 
       if (executing.length >= concurrency) {
@@ -74,8 +79,16 @@ export abstract class SchedulerBase {
       }
     }
 
-    // Wait for remaining executions
-    results.push(...(await Promise.all(executing)));
+    // Wait for remaining executions, ensuring all promises resolve
+    const remainingResults = await Promise.allSettled(executing);
+    for (const settled of remainingResults) {
+      if (settled.status === 'fulfilled') {
+        results.push(settled.value);
+      } else {
+        schedulerError(`executeBatch: promise rejected: ${settled.reason?.message ?? settled.reason}`, settled.reason);
+        results.push(false);
+      }
+    }
     return results;
   }
 

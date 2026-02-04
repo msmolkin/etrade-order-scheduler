@@ -1,6 +1,7 @@
 import { ETradeClient } from './etrade-client.js';
 import { OrderService } from './order-service.js';
 import type { Order, OrderDuration, ETradeOrderRequest } from '../../shared/types/index.js';
+import { logOrderAttempt } from '../../scheduler/logger.js';
 
 export class OrderExecutor {
   constructor(
@@ -51,6 +52,7 @@ export class OrderExecutor {
           etradeOrderId,
         });
 
+        logOrderAttempt(order.id, order.symbol, true);
         console.log(`✓ Order ${order.id} placed successfully. E*TRADE Order ID: ${etradeOrderId}`);
         return true;
       } else {
@@ -61,6 +63,7 @@ export class OrderExecutor {
       }
     } catch (error: any) {
       const errorMessage = error?.message || 'Unknown error';
+      logOrderAttempt(order.id, order.symbol, false, errorMessage);
       console.error(`✗ Failed to execute order ${order.id}:`, errorMessage);
 
       await this.orderService.logExecution(order.id, 'REJECTED', {
