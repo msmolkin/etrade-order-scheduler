@@ -220,7 +220,9 @@ const REQUEST_TOKEN_FILE = path.join(process.cwd(), '.oauth_request_token.json')
 
 async function main() {
   const phase = process.env.ETRADE_OAUTH_PHASE;
-  const verifierFromEnv = process.env.ETRADE_VERIFIER;
+  const verifierFromEnv = process.env.ETRADE_VERIFIER
+    ? process.env.ETRADE_VERIFIER.toUpperCase()
+    : undefined;
   const saveTokens = process.env.ETRADE_SAVE_TOKENS === 'y' || process.env.ETRADE_SAVE_TOKENS === 'yes';
 
   // Phase 2: complete with verifier from env (non-interactive)

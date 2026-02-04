@@ -401,6 +401,38 @@ export default function OrderForm({ draft }: OrderFormProps) {
                   symbol: e.target.value.toUpperCase(),
                 })
               }
+              onKeyDown={(e) => {
+                const key = e.key;
+                if (key === 'Enter') {
+                  // Use the typed symbol rather than submitting the form.
+                  e.preventDefault();
+                  const query = formData.symbol.trim().toUpperCase();
+                  if (!query) return;
+
+                  const exact = symbolResults.find(
+                    (r) => r.symbol.toUpperCase() === query
+                  );
+                  if (exact) {
+                    handleSelectSymbol(exact);
+                  } else {
+                    setFormData((prev) => ({
+                      ...prev,
+                      symbol: query,
+                    }));
+                    setShowSymbolDropdown(false);
+                  }
+                } else if (key === 'Tab') {
+                  // When tabbing away, accept the typed symbol and close dropdown.
+                  const query = formData.symbol.trim().toUpperCase();
+                  if (query) {
+                    setFormData((prev) => ({
+                      ...prev,
+                      symbol: query,
+                    }));
+                  }
+                  setShowSymbolDropdown(false);
+                }
+              }}
               onFocus={() => {
                 if (symbolResults.length > 0) {
                   setShowSymbolDropdown(true);
@@ -581,7 +613,27 @@ export default function OrderForm({ draft }: OrderFormProps) {
               required
               min="1"
               value={formData.quantity}
-              onChange={(e) => setFormData({ ...formData, quantity: parseInt(e.target.value) || 1 })}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === '') {
+                  // Allow temporarily empty while typing/backspacing.
+                  setFormData({ ...formData, quantity: '' as any });
+                  return;
+                }
+                const parsed = parseInt(raw, 10);
+                if (Number.isNaN(parsed)) {
+                  return;
+                }
+                setFormData({
+                  ...formData,
+                  quantity: parsed < 1 ? (1 as any) : (parsed as any),
+                });
+              }}
+              onBlur={() => {
+                if (!formData.quantity) {
+                  setFormData({ ...formData, quantity: 1 as any });
+                }
+              }}
               className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             />
           </div>
