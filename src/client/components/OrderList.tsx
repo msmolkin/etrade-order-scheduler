@@ -138,15 +138,19 @@ export default function OrderList() {
             >
               <div className="flex items-start justify-between">
                 <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
+                  <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mb-2">
                     <h3 className="text-lg font-semibold text-white">{order.symbol}</h3>
+                    <span aria-hidden="true" className="text-slate-500 select-none">·</span>
                     <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(order.status)}`}>
                       {order.status}
                     </span>
                     {order.requiresDaily && (
-                      <span className="px-2 py-1 text-xs rounded-full bg-amber-500/20 text-amber-400">
-                        DAILY
-                      </span>
+                      <>
+                        <span aria-hidden="true" className="text-slate-500 select-none">·</span>
+                        <span className="px-2 py-1 text-xs rounded-full bg-amber-500/20 text-amber-400">
+                          DAILY
+                        </span>
+                      </>
                     )}
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm text-slate-400">

@@ -70,7 +70,11 @@ router.get('/', async (req, res) => {
     });
   } catch (error: any) {
     // Return empty list so the form still loads; user can enter Account ID manually
-    console.warn('[GET /api/accounts]', error.message || error);
+    const msg = error.message || String(error);
+    console.warn('[GET /api/accounts]', msg);
+    if (msg.includes('session expired') || msg.includes('invalid')) {
+      console.warn('[GET /api/accounts] If you just updated .env with new tokens, restart the server (stop and run npm run dev again) so it picks them up.');
+    }
     return emptyResponse();
   }
 });

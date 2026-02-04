@@ -59,7 +59,7 @@ export class ETradeClient {
         const status = err.response?.status;
         if (status === 401 || status === 403) {
           err.message =
-            'E*TRADE session expired or invalid. Re-authenticate via OAuth to get new tokens (e.g. run the OAuth flow and update .env, or use the app’s sign-in).';
+            'E*TRADE session expired or invalid. Re-authenticate via OAuth to get new tokens (e.g. run the OAuth flow and update .env). If you already updated .env, restart the server so it loads the new tokens.';
         }
         return Promise.reject(err);
       }
