@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { OrderService } from '../services/order-service.js';
 import { ETradeClient } from '../services/etrade-client.js';
 import { OrderExecutor } from '../services/order-executor.js';
+import { broadcastOrderUpdate } from '../ws-broadcast.js';
 import type { Order, SessionTime } from '../../shared/types/index.js';
 
 const router = Router();
@@ -168,6 +169,7 @@ router.post('/', async (req, res) => {
       maxRetries: Number(raw.maxRetries) || 3,
     });
 
+    broadcastOrderUpdate(order);
     res.status(201).json(order);
   } catch (error: any) {
     console.error('Create order failed:', error);
@@ -201,6 +203,7 @@ router.post('/:id/resend', async (req, res) => {
       retryCount: 0,
     });
 
+    broadcastOrderUpdate(newOrder);
     res.status(201).json(newOrder);
   } catch (error: any) {
     res.status(400).json({ error: error.message });

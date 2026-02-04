@@ -3,6 +3,7 @@ import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 import dotenv from 'dotenv';
+import { setBroadcast } from './ws-broadcast.js';
 import ordersRouter from './routes/orders.js';
 import accountsRouter from './routes/accounts.js';
 import positionsRouter from './routes/positions.js';
@@ -64,21 +65,16 @@ wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() }));
 });
 
-// Broadcast function for order updates
-export function broadcastOrderUpdate(order: any) {
+setBroadcast((order) => {
   const message = JSON.stringify({
     type: 'order_update',
     order,
     timestamp: new Date().toISOString(),
   });
-
   wss.clients.forEach((client) => {
-    if (client.readyState === 1) {
-      // OPEN
-      client.send(message);
-    }
+    if (client.readyState === 1) client.send(message);
   });
-}
+});
 
 // Start server
 server.listen(port, async () => {
