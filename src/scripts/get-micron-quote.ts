@@ -4,6 +4,29 @@ import dotenv from 'dotenv';
 
 dotenv.config({ quiet: true });
 
+/** E*TRADE raw quote market data (nested under quote.All in API response) */
+interface ETradeQuoteAll {
+  lastTrade?: number;
+  previousClose?: number;
+  bid?: number;
+  ask?: number;
+  bidSize?: number;
+  askSize?: number;
+  totalVolume?: number;
+  previousDayVolume?: number;
+  high?: number;
+  low?: number;
+  open?: number;
+  changeClose?: number;
+  changeClosePercentage?: number;
+  companyName?: string;
+  symbolDescription?: string;
+  exDividendDate?: number;
+  dividend?: number;
+  lastSize?: number;
+  timeOfLastTrade?: number;
+}
+
 const DEFAULT_STREAM_SECONDS = 5;
 
 const args = process.argv.slice(2);
@@ -76,8 +99,9 @@ async function getMicronQuote() {
       process.exit(1);
     }
 
-    const quote = quotes[0];
-    const quoteData = quote.All || quote;
+    // API returns market data in quote.All; getQuote() is typed as ETradeQuote[] but actual shape has All
+    const quote = quotes[0] as ETradeQuoteAll & { All?: ETradeQuoteAll };
+    const quoteData: ETradeQuoteAll = quote.All ?? quote;
 
     // Extract market data
     const currentPrice = quoteData.lastTrade || quoteData.previousClose || 0;
@@ -186,8 +210,8 @@ async function getMicronQuote() {
       try {
         const quotes = await client.getQuote(['MU']);
         if (quotes && quotes.length > 0) {
-          const streamQuote = quotes[0];
-          const streamData = streamQuote.All || streamQuote;
+          const streamQuote = quotes[0] as ETradeQuoteAll & { All?: ETradeQuoteAll };
+          const streamData: ETradeQuoteAll = streamQuote.All ?? streamQuote;
           
           const streamBid = streamData.bid || 0;
           const streamBidSize = streamData.bidSize || 0;
