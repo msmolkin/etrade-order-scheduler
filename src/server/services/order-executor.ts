@@ -4,10 +4,16 @@ import type { Order, OrderDuration, ETradeOrderRequest } from '../../shared/type
 import { logOrderAttempt } from '../../scheduler/logger.js';
 
 export class OrderExecutor {
+  private onOrderFilled?: (order: Order) => Promise<void>;
+
   constructor(
     private etradeClient: ETradeClient,
     private orderService: OrderService
   ) {}
+
+  setOnOrderFilledCallback(callback: (order: Order) => Promise<void>): void {
+    this.onOrderFilled = callback;
+  }
 
   async executeOrder(order: Order, lockerId: string): Promise<boolean> {
     try {
@@ -54,6 +60,17 @@ export class OrderExecutor {
 
         logOrderAttempt(order.id, order.symbol, true);
         console.log(`✓ Order ${order.id} placed successfully. E*TRADE Order ID: ${etradeOrderId}`);
+
+        // Reload order to get latest state, then call callback if set
+        const updatedOrder = await this.orderService.getOrder(order.id);
+        if (updatedOrder && this.onOrderFilled) {
+          try {
+            await this.onOrderFilled(updatedOrder);
+          } catch (error: any) {
+            console.error(`Error in onOrderFilled callback for order ${order.id}:`, error.message);
+          }
+        }
+
         return true;
       } else {
         // Check for error messages in response
@@ -128,13 +145,18 @@ export class OrderExecutor {
   private mapToETradeRequest(order: Order): ETradeOrderRequest {
     const isOption = order.securityType === 'OPTION';
 
+    // For threshold orders, use threshold quantity if available
+    const quantity = order.thresholdEnabled && order.thresholdQuantity != null
+      ? order.thresholdQuantity
+      : order.quantity;
+
     const request: ETradeOrderRequest = {
       accountIdKey: order.accountId,
       symbol: order.symbol,
       orderAction: order.action as ETradeOrderRequest['orderAction'],
       clientOrderId: `ord${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
       priceType: this.mapOrderType(order.orderType),
-      quantity: order.quantity,
+      quantity,
       orderTerm: this.mapDuration(order.actualDuration),
       marketSession: order.sessionTime === 'EXTENDED' ? 'EXTENDED' : 'REGULAR',
       allOrNone: false,

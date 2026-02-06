@@ -1,5 +1,6 @@
 export type OrderDuration = 'DAY' | 'GTC' | 'FILL_OR_KILL' | 'IMMEDIATE_OR_CANCEL';
-export type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT';
+export type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT' | 'THRESHOLD';
+export type ThresholdPriceSource = 'BID' | 'ASK' | 'LAST';
 export type OrderAction = 'BUY' | 'SELL' | 'BUY_TO_COVER' | 'SELL_SHORT';
 export type OrderStatus = 'PENDING' | 'SCHEDULED' | 'SUBMITTED' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELLED' | 'REJECTED' | 'EXPIRED';
 export type SecurityType = 'EQUITY' | 'OPTION' | 'MUTUAL_FUND' | 'MONEY_MARKET_FUND';
@@ -47,6 +48,19 @@ export interface Order {
   lastError?: string;
   retryCount: number;
   maxRetries: number;
+
+  // Threshold order fields
+  thresholdEnabled?: boolean;
+  thresholdPrice?: number;
+  thresholdPriceSource?: ThresholdPriceSource;
+  thresholdQuantity?: number;
+  thresholdPollIntervalMs?: number;
+  thresholdLogFile?: string;
+  sellOrderEnabled?: boolean;
+  sellOrderThresholdPrice?: number;
+  sellOrderThresholdPriceSource?: ThresholdPriceSource;
+  sellOrderQuantity?: number;
+  sellOrderTriggeredByOrderId?: string;
 
   // Metadata
   createdAt: Date;

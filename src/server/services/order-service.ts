@@ -14,10 +14,15 @@ export class OrderService {
         strike_price, expiration_date, action, order_type, quantity,
         limit_price, stop_price, preferred_duration, actual_duration,
         requires_daily, session_time, scheduled_for, schedule_enabled,
-        status, retry_count, max_retries, created_at, updated_at, notes
+        status, retry_count, max_retries, created_at, updated_at, notes,
+        threshold_enabled, threshold_price, threshold_price_source, threshold_quantity,
+        threshold_poll_interval_ms, threshold_log_file, sell_order_enabled,
+        sell_order_threshold_price, sell_order_threshold_price_source, sell_order_quantity,
+        sell_order_triggered_by_order_id
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-        $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
+        $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
+        $30, $31, $32, $33, $34, $35, $36
       ) RETURNING *`,
       [
         id,
@@ -45,6 +50,17 @@ export class OrderService {
         now,
         now,
         order.notes,
+        order.thresholdEnabled ?? false,
+        order.thresholdPrice,
+        order.thresholdPriceSource,
+        order.thresholdQuantity,
+        order.thresholdPollIntervalMs ?? 1000,
+        order.thresholdLogFile,
+        order.sellOrderEnabled ?? false,
+        order.sellOrderThresholdPrice,
+        order.sellOrderThresholdPriceSource,
+        order.sellOrderQuantity,
+        order.sellOrderTriggeredByOrderId,
       ]
     );
 
@@ -119,6 +135,21 @@ export class OrderService {
        AND l.locked = false
        ORDER BY l.scheduled_time ASC`,
       [sessionTime, time]
+    );
+    return result.rows.map((row) => this.mapRowToOrder(row));
+  }
+
+  /** Orders with scheduled_time <= time (any session), for arbitrary-time scheduling. */
+  async getOrdersDueByTime(time: Date): Promise<Order[]> {
+    const result = await query<Order>(
+      `SELECT o.* FROM orders o
+       INNER JOIN scheduled_order_locks l ON o.id = l.order_id
+       WHERE o.schedule_enabled = true
+       AND o.status = 'SCHEDULED'
+       AND l.scheduled_time <= $1
+       AND l.locked = false
+       ORDER BY l.scheduled_time ASC`,
+      [time]
     );
     return result.rows.map((row) => this.mapRowToOrder(row));
   }
@@ -259,6 +290,27 @@ export class OrderService {
     );
   }
 
+  async getActiveThresholdOrders(): Promise<Order[]> {
+    const result = await query<Order>(
+      `SELECT * FROM orders
+       WHERE threshold_enabled = true
+       AND status IN ('PENDING', 'SCHEDULED')
+       ORDER BY created_at ASC`
+    );
+    return result.rows.map((row) => this.mapRowToOrder(row));
+  }
+
+  async getSellOrdersForBuyOrder(buyOrderId: string): Promise<Order[]> {
+    const result = await query<Order>(
+      `SELECT * FROM orders
+       WHERE sell_order_enabled = true
+       AND sell_order_triggered_by_order_id = $1
+       AND status IN ('PENDING', 'SCHEDULED')`,
+      [buyOrderId]
+    );
+    return result.rows.map((row) => this.mapRowToOrder(row));
+  }
+
   private mapRowToOrder(row: any): Order {
     return {
       id: row.id,
@@ -289,6 +341,17 @@ export class OrderService {
       lastError: row.last_error,
       retryCount: row.retry_count,
       maxRetries: row.max_retries,
+      thresholdEnabled: row.threshold_enabled ?? false,
+      thresholdPrice: row.threshold_price ? parseFloat(row.threshold_price) : undefined,
+      thresholdPriceSource: row.threshold_price_source,
+      thresholdQuantity: row.threshold_quantity,
+      thresholdPollIntervalMs: row.threshold_poll_interval_ms ?? 1000,
+      thresholdLogFile: row.threshold_log_file,
+      sellOrderEnabled: row.sell_order_enabled ?? false,
+      sellOrderThresholdPrice: row.sell_order_threshold_price ? parseFloat(row.sell_order_threshold_price) : undefined,
+      sellOrderThresholdPriceSource: row.sell_order_threshold_price_source,
+      sellOrderQuantity: row.sell_order_quantity,
+      sellOrderTriggeredByOrderId: row.sell_order_triggered_by_order_id,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       notes: row.notes,

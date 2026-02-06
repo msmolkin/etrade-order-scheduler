@@ -122,6 +122,25 @@ npm run scheduler:local
 The scheduler will automatically place orders at:
 - **9:30 AM EST** - Market open orders
 - **7:00 AM EST** - Extended hours orders
+- **Every 30 seconds** - Due-order check (for arbitrary scheduled times)
+
+### 6. Connection test (E\*TRADE API)
+
+To verify your E\*TRADE credentials and API connectivity, run the Micron (MU) quote script:
+
+```bash
+npm run connection-test
+```
+
+Or directly: `npx tsx src/scripts/get-micron-quote.ts`
+
+You should see MU market data (bid, ask, last). Use `--hide` for minimal output. If you see 401 or "session expired", run the OAuth flow again (`npm run oauth` or `ETRADE_SANDBOX=false npm run oauth` for production).
+
+Alternative: run the XOM test order (no order is placed without confirmation in the script):
+
+```bash
+npm run execute:xom-test-order
+```
 
 ## Order Duration Conversion
 

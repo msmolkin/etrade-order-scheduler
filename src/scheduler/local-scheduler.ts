@@ -29,6 +29,7 @@ export class LocalScheduler extends SchedulerBase {
   private extendedHoursJob?: cron.ScheduledTask;
   private verificationJob?: cron.ScheduledTask;
   private catchUpJob?: cron.ScheduledTask;
+  private dueOrdersInterval?: ReturnType<typeof setInterval>;
   private verificationRunning = false;
 
   async start(): Promise<void> {
@@ -104,6 +105,11 @@ export class LocalScheduler extends SchedulerBase {
       timezone: SCHEDULER_TZ,
     });
 
+    // Due-orders: every 30 seconds, process any order whose scheduled_time has passed
+    this.dueOrdersInterval = setInterval(() => {
+      setImmediate(() => this.processDueOrders());
+    }, 30_000);
+
     // Startup catch-up: run overdue EXTENDED/MARKET orders now (e.g. scheduler started at 7:30)
     const { hour, minute, isWeekday } = getLocalTimeInSchedulerTz();
     if (isWeekday) {
@@ -124,6 +130,7 @@ export class LocalScheduler extends SchedulerBase {
     console.log('  - Extended hours orders: 7:00 AM EST (Mon-Fri)');
     console.log('  - Catch-up: on startup and every 10 min (6:00–10:00)');
     console.log('  - Order verification: Every 15 minutes (during market hours)');
+    console.log('  - Due orders: Every 30 seconds (for arbitrary scheduled times)');
     console.log('\nScheduler is running. Press Ctrl+C to stop.\n');
   }
 
@@ -145,6 +152,11 @@ export class LocalScheduler extends SchedulerBase {
 
     if (this.verificationJob) {
       this.verificationJob.stop();
+    }
+
+    if (this.dueOrdersInterval) {
+      clearInterval(this.dueOrdersInterval);
+      this.dueOrdersInterval = undefined;
     }
 
     closeSchedulerLog();

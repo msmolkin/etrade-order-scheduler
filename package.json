@@ -17,6 +17,7 @@
     "oauth": "tsx src/scripts/oauth-flow.ts",
     "execute:xom-test-order": "tsx src/scripts/execute-xom-order.ts",
     "execute:wulf-test-order": "tsx src/scripts/execute-wulf-order.ts",
+    "connection-test": "tsx src/scripts/get-micron-quote.ts",
     "slv-overnight": "tsx src/scripts/send-slv-overnight-order.ts",
     "test-overnight-session": "tsx src/scripts/test-overnight-market-session.ts",
     "web:overnight-preview-place": "tsx src/scripts/webapitrd-overnight-preview-and-place.ts",

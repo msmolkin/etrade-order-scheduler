@@ -3,6 +3,7 @@ import { OrderService } from '../services/order-service.js';
 import { ETradeClient } from '../services/etrade-client.js';
 import { OrderExecutor } from '../services/order-executor.js';
 import { broadcastOrderUpdate } from '../ws-broadcast.js';
+import { getThresholdMonitor } from '../context.js';
 import type { Order, SessionTime } from '../../shared/types/index.js';
 
 const router = Router();
@@ -132,6 +133,32 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Quantity must be a positive integer' });
     }
 
+    // Handle threshold order validation
+    const isThresholdOrder = raw.orderType === 'THRESHOLD';
+    const thresholdEnabled = Boolean(raw.thresholdEnabled) || isThresholdOrder;
+
+    if (isThresholdOrder) {
+      if (!raw.thresholdPrice || raw.thresholdQuantity == null) {
+        return res.status(400).json({
+          error: 'Threshold orders require thresholdPrice and thresholdQuantity',
+        });
+      }
+    }
+
+    // Set default threshold price source based on action
+    let thresholdPriceSource = raw.thresholdPriceSource as Order['thresholdPriceSource'];
+    if (thresholdEnabled && !thresholdPriceSource) {
+      thresholdPriceSource = raw.action === 'BUY' ? 'BID' : 'ASK';
+    }
+
+    // Generate log file path if not provided but threshold is enabled
+    let thresholdLogFile = raw.thresholdLogFile as string | undefined;
+    if (thresholdEnabled && !thresholdLogFile) {
+      const symbol = String(raw.symbol).toUpperCase();
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      thresholdLogFile = `logs/quotes-${symbol}-${timestamp}.csv`;
+    }
+
     const orderData: Omit<
       Order,
       'id' | 'createdAt' | 'updatedAt' | 'status' | 'requiresDaily' | 'retryCount' | 'maxRetries'
@@ -154,6 +181,17 @@ router.post('/', async (req, res) => {
       optionSymbol: raw.optionSymbol != null && raw.optionSymbol !== '' ? String(raw.optionSymbol) : undefined,
       optionType: raw.optionType as Order['optionType'] | undefined,
       notes: raw.notes != null && raw.notes !== '' ? String(raw.notes) : undefined,
+      thresholdEnabled,
+      thresholdPrice: raw.thresholdPrice != null && raw.thresholdPrice !== '' ? Number(raw.thresholdPrice) : undefined,
+      thresholdPriceSource,
+      thresholdQuantity: raw.thresholdQuantity != null ? Number(raw.thresholdQuantity) : undefined,
+      thresholdPollIntervalMs: raw.thresholdPollIntervalMs != null ? Number(raw.thresholdPollIntervalMs) : undefined,
+      thresholdLogFile,
+      sellOrderEnabled: Boolean(raw.sellOrderEnabled),
+      sellOrderThresholdPrice: raw.sellOrderThresholdPrice != null && raw.sellOrderThresholdPrice !== '' ? Number(raw.sellOrderThresholdPrice) : undefined,
+      sellOrderThresholdPriceSource: raw.sellOrderThresholdPriceSource as Order['sellOrderThresholdPriceSource'],
+      sellOrderQuantity: raw.sellOrderQuantity != null ? Number(raw.sellOrderQuantity) : undefined,
+      sellOrderTriggeredByOrderId: raw.sellOrderTriggeredByOrderId as string | undefined,
     };
 
     let scheduledFor: Date | undefined;
@@ -176,10 +214,61 @@ router.post('/', async (req, res) => {
       maxRetries: Number(raw.maxRetries) || 3,
     });
 
+    // If this is a buy order with sell order enabled, create the sell order
+    let sellOrder: Order | null = null;
+    if (
+      order.action === 'BUY' &&
+      order.sellOrderEnabled &&
+      order.sellOrderThresholdPrice != null &&
+      order.sellOrderQuantity != null
+    ) {
+      const sellOrderData: Omit<
+        Order,
+        'id' | 'createdAt' | 'updatedAt' | 'status' | 'requiresDaily' | 'retryCount' | 'maxRetries'
+      > = {
+        ...orderData,
+        action: 'SELL',
+        thresholdEnabled: true,
+        thresholdPrice: order.sellOrderThresholdPrice,
+        thresholdPriceSource: order.sellOrderThresholdPriceSource || 'ASK',
+        thresholdQuantity: order.sellOrderQuantity,
+        thresholdPollIntervalMs: order.thresholdPollIntervalMs,
+        thresholdLogFile: order.thresholdLogFile
+          ? order.thresholdLogFile.replace(/\.csv$/, '-sell.csv')
+          : undefined,
+        sellOrderEnabled: false,
+        sellOrderTriggeredByOrderId: order.id,
+        // Don't start monitoring until buy order executes
+        status: 'PENDING',
+      };
+
+      sellOrder = await orderService.createOrder({
+        ...sellOrderData,
+        requiresDaily,
+        retryCount: 0,
+        maxRetries: Number(raw.maxRetries) || 3,
+      });
+
+      console.log(
+        `[POST /api/orders] created sell order ${sellOrder.id} (triggered by ${order.id})`
+      );
+    }
+
     console.log(
-      `[POST /api/orders] created ${order.id} ${order.symbol} ${order.status} scheduleEnabled=${order.scheduleEnabled}`
+      `[POST /api/orders] created ${order.id} ${order.symbol} ${order.status} scheduleEnabled=${order.scheduleEnabled} thresholdEnabled=${order.thresholdEnabled}`
     );
+    
+    // Start threshold monitoring if enabled
+    const thresholdMonitor = getThresholdMonitor?.() ?? null;
+    if (order.thresholdEnabled && thresholdMonitor) {
+      await thresholdMonitor.addOrder(order);
+    }
+    
     broadcastOrderUpdate(order);
+    if (sellOrder) {
+      broadcastOrderUpdate(sellOrder);
+    }
+    
     res.status(201).json(order);
   } catch (error: any) {
     console.error('Create order failed:', error);

@@ -1,5 +1,17 @@
 # How to run practice orders
 
+## 0. Connection test (E*TRADE API)
+
+Before placing orders, verify your E*TRADE credentials and API connectivity:
+
+```bash
+npm run connection-test
+```
+
+(or `npx tsx src/scripts/get-micron-quote.ts`)
+
+You should see Micron (MU) market data (bid, ask, last). Use `--hide` for minimal output. If you get 401 or "session expired", re-run the OAuth flow (step 1). For production, use the same mode as your app (e.g. `ETRADE_SANDBOX=false npx tsx src/scripts/get-micron-quote.ts`).
+
 ## 1. Get E*TRADE access tokens
 
 ```bash

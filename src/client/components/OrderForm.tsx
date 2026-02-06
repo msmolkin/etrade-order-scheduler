@@ -43,6 +43,16 @@ const initialFormState = {
   scheduledFor: '',
   scheduleEnabled: false,
   notes: '',
+  thresholdEnabled: false,
+  thresholdPrice: '',
+  thresholdPriceSource: 'BID' as 'BID' | 'ASK' | 'LAST',
+  thresholdQuantity: 1,
+  thresholdPollIntervalMs: 1000,
+  thresholdLogFile: '',
+  sellOrderEnabled: false,
+  sellOrderThresholdPrice: '',
+  sellOrderThresholdPriceSource: 'ASK' as 'BID' | 'ASK' | 'LAST',
+  sellOrderQuantity: 1,
 };
 
 export default function OrderForm({ draft }: OrderFormProps) {
@@ -64,6 +74,16 @@ export default function OrderForm({ draft }: OrderFormProps) {
     scheduledFor: '',
     scheduleEnabled: false,
     notes: '',
+    thresholdEnabled: false,
+    thresholdPrice: '',
+    thresholdPriceSource: 'BID' as 'BID' | 'ASK' | 'LAST',
+    thresholdQuantity: 1,
+    thresholdPollIntervalMs: 1000,
+    thresholdLogFile: '',
+    sellOrderEnabled: false,
+    sellOrderThresholdPrice: '',
+    sellOrderThresholdPriceSource: 'ASK' as 'BID' | 'ASK' | 'LAST',
+    sellOrderQuantity: 1,
   });
 
   const [submitting, setSubmitting] = useState(false);
@@ -288,6 +308,18 @@ export default function OrderForm({ draft }: OrderFormProps) {
         status: formData.scheduleEnabled ? 'SCHEDULED' : 'PENDING',
         retryCount: 0,
         maxRetries: 3,
+        thresholdEnabled: formData.orderType === 'THRESHOLD' || formData.thresholdEnabled,
+        thresholdPrice: formData.thresholdPrice ? parseFloat(formData.thresholdPrice) : undefined,
+        thresholdPriceSource: formData.thresholdPriceSource,
+        thresholdQuantity: formData.thresholdQuantity,
+        thresholdPollIntervalMs: formData.thresholdPollIntervalMs,
+        thresholdLogFile: formData.thresholdLogFile || undefined,
+        sellOrderEnabled: formData.sellOrderEnabled,
+        sellOrderThresholdPrice: formData.sellOrderThresholdPrice
+          ? parseFloat(formData.sellOrderThresholdPrice)
+          : undefined,
+        sellOrderThresholdPriceSource: formData.sellOrderThresholdPriceSource,
+        sellOrderQuantity: formData.sellOrderQuantity,
       };
 
       await createOrder(orderData);
@@ -297,6 +329,8 @@ export default function OrderForm({ draft }: OrderFormProps) {
       setFormData({
         ...initialFormState,
         accountId: formData.accountId,
+        thresholdPriceSource: formData.action === 'BUY' ? 'BID' : 'ASK',
+        sellOrderThresholdPriceSource: 'ASK',
       });
     } catch (err: any) {
       setError(err.message || 'Failed to create order');
@@ -573,7 +607,20 @@ export default function OrderForm({ draft }: OrderFormProps) {
             </label>
             <select
               value={formData.action}
-              onChange={(e) => setFormData({ ...formData, action: e.target.value })}
+              onChange={(e) => {
+                const newAction = e.target.value;
+                setFormData({
+                  ...formData,
+                  action: newAction,
+                  // Update default price source when action changes for threshold orders
+                  thresholdPriceSource:
+                    formData.orderType === 'THRESHOLD'
+                      ? newAction === 'BUY'
+                        ? 'BID'
+                        : 'ASK'
+                      : formData.thresholdPriceSource,
+                });
+              }}
               className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
             >
               <option value="BUY">BUY</option>
@@ -589,15 +636,215 @@ export default function OrderForm({ draft }: OrderFormProps) {
             </label>
             <select
               value={formData.orderType}
-              onChange={(e) => setFormData({ ...formData, orderType: e.target.value })}
+              onChange={(e) => {
+                const newOrderType = e.target.value;
+                setFormData({
+                  ...formData,
+                  orderType: newOrderType,
+                  thresholdEnabled: newOrderType === 'THRESHOLD',
+                  // Set default price source based on action when switching to THRESHOLD
+                  thresholdPriceSource:
+                    newOrderType === 'THRESHOLD'
+                      ? formData.action === 'BUY'
+                        ? 'BID'
+                        : 'ASK'
+                      : formData.thresholdPriceSource,
+                });
+              }}
               className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             >
               <option value="MARKET">MARKET</option>
               <option value="LIMIT">LIMIT</option>
               <option value="STOP">STOP</option>
               <option value="STOP_LIMIT">STOP LIMIT</option>
+              <option value="THRESHOLD">THRESHOLD</option>
             </select>
           </div>
+
+          {formData.orderType === 'THRESHOLD' && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Threshold price
+                </label>
+                <input
+                  type="number"
+                  required
+                  step="0.01"
+                  placeholder="Target price"
+                  value={formData.thresholdPrice}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      thresholdPrice: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Price source
+                </label>
+                <select
+                  value={formData.thresholdPriceSource}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      thresholdPriceSource: e.target.value as 'BID' | 'ASK' | 'LAST',
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                >
+                  <option value="BID">BID</option>
+                  <option value="ASK">ASK</option>
+                  <option value="LAST">LAST</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Threshold quantity
+                </label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  value={formData.thresholdQuantity}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      thresholdQuantity: parseInt(e.target.value) || 1,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Poll interval (ms)
+                </label>
+                <input
+                  type="number"
+                  min="100"
+                  step="100"
+                  value={formData.thresholdPollIntervalMs}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      thresholdPollIntervalMs: parseInt(e.target.value) || 1000,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  How often to check price (default: 1000ms = 1 second)
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Log file path (optional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="logs/quotes-SYMBOL-timestamp.csv"
+                  value={formData.thresholdLogFile}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      thresholdLogFile: e.target.value,
+                    })
+                  }
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  Auto-generated if empty: logs/quotes-{formData.symbol || 'SYMBOL'}-timestamp.csv
+                </p>
+              </div>
+
+              <div className="flex items-center space-x-2">
+                <input
+                  type="checkbox"
+                  id="sellOrderEnabled"
+                  checked={formData.sellOrderEnabled}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      sellOrderEnabled: e.target.checked,
+                    })
+                  }
+                  className="w-4 h-4 bg-slate-700 border-slate-600 rounded text-blue-600 focus:ring-blue-500"
+                />
+                <label htmlFor="sellOrderEnabled" className="text-xs font-medium text-slate-400">
+                  Enable sell order after buy executes
+                </label>
+              </div>
+
+              {formData.sellOrderEnabled && formData.action === 'BUY' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">
+                      Sell threshold price
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      placeholder="Sell target price"
+                      value={formData.sellOrderThresholdPrice}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          sellOrderThresholdPrice: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">
+                      Sell price source
+                    </label>
+                    <select
+                      value={formData.sellOrderThresholdPriceSource}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          sellOrderThresholdPriceSource: e.target.value as 'BID' | 'ASK' | 'LAST',
+                        })
+                      }
+                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                    >
+                      <option value="BID">BID</option>
+                      <option value="ASK">ASK</option>
+                      <option value="LAST">LAST</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1">
+                      Sell quantity
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={formData.sellOrderQuantity}
+                      onChange={(e) =>
+                        setFormData({
+                          ...formData,
+                          sellOrderQuantity: parseInt(e.target.value) || 1,
+                        })
+                      }
+                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+                </>
+              )}
+            </>
+          )}
         </section>
 
         <section className="space-y-3">

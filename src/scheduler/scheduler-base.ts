@@ -58,6 +58,22 @@ export abstract class SchedulerBase {
     }
   }
 
+  /** Process orders whose scheduled_time has passed (arbitrary-time scheduling, e.g. "in 30 seconds"). */
+  protected async processDueOrders(): Promise<void> {
+    try {
+      await this.orderService.cleanupExpiredLocks();
+      const orders = await this.orderService.getOrdersDueByTime(new Date());
+      if (orders.length === 0) return;
+      schedulerLog(`[${this.schedulerId}] Due-orders check: ${orders.length} order(s) due`);
+      const results = await this.executeBatch(orders, 5);
+      const successful = results.filter((r) => r).length;
+      await this.rescheduleRecurringOrders(orders.filter((o) => o.requiresDaily));
+      schedulerLog(`[${this.schedulerId}] Due-orders complete: ${successful}/${orders.length} successful`);
+    } catch (error: any) {
+      schedulerError(`[${this.schedulerId}] processDueOrders: ${error?.message ?? error}`, error);
+    }
+  }
+
   private async executeBatch(orders: Order[], concurrency: number): Promise<boolean[]> {
     const results: boolean[] = [];
     const executing: Promise<boolean>[] = [];

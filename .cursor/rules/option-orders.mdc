@@ -1,0 +1,15 @@
+---
+description: Default prices and behavior when placing option orders without a limit price
+alwaysApply: true
+---
+
+# Option orders without a price
+
+When placing an **option** order (securityType OPTION) and no limit/price is provided:
+
+1. **Prefer asking the user** for the limit price when possible.
+2. If you must choose a default without asking:
+   - **BUY** (or BUY_TO_COVER): use **0.05** as the limit price.
+   - **SELL** (or SELL_SHORT): use **500** as the limit price.
+
+Do not use other placeholders (e.g. 0.50) for option orders. Never submit an option order with a price that was chosen arbitrarily without either asking or using these defaults.
