@@ -5,6 +5,10 @@ export interface Order {
   accountId: string;
   symbol: string;
   securityType: string;
+  optionSymbol?: string;
+  optionType?: 'CALL' | 'PUT';
+  strikePrice?: number;
+  expirationDate?: string;
   action: string;
   orderType: string;
   quantity: number;
@@ -93,6 +97,16 @@ export async function submitOrder(orderId: string): Promise<{ success: boolean; 
     throw new Error(error.error || 'Failed to submit order');
   }
   return response.json();
+}
+
+export async function fetchOptionExpirations(symbol: string): Promise<string[]> {
+  const params = new URLSearchParams({ symbol });
+  const response = await fetch(
+    `${API_BASE_URL}/orders/market/option-expirations?${params}`
+  );
+  if (!response.ok) throw new Error('Failed to fetch option expirations');
+  const data = await response.json();
+  return data.expirationDates ?? [];
 }
 
 export async function fetchOptionsChain(

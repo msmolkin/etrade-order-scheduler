@@ -32,7 +32,38 @@ export class OrderExecutor {
       });
 
       // Prepare E*TRADE order request
-      const etradeRequest = this.mapToETradeRequest(order);
+      let etradeRequest = this.mapToETradeRequest(order);
+
+      // Option orders: E*TRADE often requires productId (OSI symbol). Look up from chain when missing.
+      if (
+        order.securityType === 'OPTION' &&
+        !etradeRequest.productId &&
+        order.strikePrice != null &&
+        order.optionType
+      ) {
+        const exp = this.normalizeExpirationDate(order.expirationDate);
+        if (exp && !Number.isNaN(exp.getTime())) {
+          try {
+            const osiKey = await this.etradeClient.getOptionOsiKey(
+              order.symbol,
+              exp.getFullYear(),
+              exp.getMonth() + 1,
+              exp.getDate(),
+              order.optionType,
+              order.strikePrice
+            );
+            if (osiKey) {
+              etradeRequest = { ...etradeRequest, productId: { symbol: osiKey, typeCode: 'OPTION' } };
+              if (process.env.ORDER_EXECUTOR_DEBUG === 'true') {
+                console.log('E*TRADE option: resolved productId (osiKey)', osiKey);
+              }
+            }
+          } catch (err: any) {
+            console.warn(`Order ${order.id}: could not resolve option osiKey: ${err?.message ?? err}`);
+          }
+        }
+      }
+
       if (process.env.ORDER_EXECUTOR_DEBUG === 'true') {
         console.log('E*TRADE request:', JSON.stringify(etradeRequest, null, 2));
       } else {
@@ -79,7 +110,7 @@ export class OrderExecutor {
         throw new Error(errorMsg);
       }
     } catch (error: any) {
-      const errorMessage = error?.message || 'Unknown error';
+      const errorMessage = this.getETradeErrorMessage(error) || error?.message || 'Unknown error';
       logOrderAttempt(order.id, order.symbol, false, errorMessage);
       console.error(`✗ Failed to execute order ${order.id}:`, errorMessage);
 
@@ -150,10 +181,12 @@ export class OrderExecutor {
       ? order.thresholdQuantity
       : order.quantity;
 
+    const orderAction = this.mapOrderActionForETrade(order.action, isOption);
+
     const request: ETradeOrderRequest = {
       accountIdKey: order.accountId,
       symbol: order.symbol,
-      orderAction: order.action as ETradeOrderRequest['orderAction'],
+      orderAction,
       clientOrderId: `ord${Date.now()}`, // ≤20 alphanumeric (E*TRADE)
       priceType: this.mapOrderType(order.orderType),
       quantity,
@@ -169,10 +202,11 @@ export class OrderExecutor {
         request.callPut = order.optionType;
       }
 
-      if (order.expirationDate instanceof Date && !isNaN(order.expirationDate.getTime())) {
-        request.expiryYear = order.expirationDate.getFullYear();
-        request.expiryMonth = order.expirationDate.getMonth() + 1;
-        request.expiryDay = order.expirationDate.getDate();
+      const expDate = this.normalizeExpirationDate(order.expirationDate);
+      if (expDate && !Number.isNaN(expDate.getTime())) {
+        request.expiryYear = expDate.getFullYear();
+        request.expiryMonth = expDate.getMonth() + 1;
+        request.expiryDay = expDate.getDate();
       }
 
       if (typeof order.strikePrice === 'number') {
@@ -196,6 +230,49 @@ export class OrderExecutor {
     }
 
     return request;
+  }
+
+  /** Normalize expiration to Date (DB can return Date or serialized string). */
+  private normalizeExpirationDate(val: Date | string | undefined | null): Date | null {
+    if (val == null) return null;
+    if (val instanceof Date) return val;
+    const s = String(val);
+    const d = /^\d{4}-\d{2}-\d{2}/.test(s) ? new Date(s.slice(0, 10) + 'T12:00:00.000Z') : new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+
+  /** Extract readable message from E*TRADE/axios error (JSON or XML). */
+  private getETradeErrorMessage(error: any): string | null {
+    const data = error?.response?.data;
+    if (data == null) return null;
+    if (typeof data === 'string') {
+      const m = data.match(/<message[^>]*>([^<]+)<\/message>/i);
+      if (m) return m[1].trim();
+      return null;
+    }
+    if (typeof data !== 'object') return null;
+    const msg = data.Error?.message ?? data.message ?? data.error ?? data.Error?.description;
+    if (typeof msg === 'string' && msg.length > 0) return msg;
+    const arr = data.PreviewOrderResponse?.Order?.[0]?.messages?.Message ?? data.Order?.[0]?.messages?.Message;
+    const first = Array.isArray(arr) ? arr[0] : arr;
+    const desc = first?.description ?? first?.message;
+    if (typeof desc === 'string' && desc.length > 0) return desc;
+    return null;
+  }
+
+  /** For options E*TRADE requires Buy Open, Sell Open, Buy Close, Sell Close (we send BUY_OPEN etc.). */
+  private mapOrderActionForETrade(
+    action: Order['action'],
+    isOption: boolean
+  ): ETradeOrderRequest['orderAction'] {
+    if (!isOption) return action as ETradeOrderRequest['orderAction'];
+    const map: Record<Order['action'], ETradeOrderRequest['orderAction']> = {
+      BUY: 'BUY_OPEN',
+      SELL: 'SELL_CLOSE',
+      BUY_TO_COVER: 'BUY_CLOSE',
+      SELL_SHORT: 'SELL_OPEN',
+    };
+    return map[action] ?? (action as ETradeOrderRequest['orderAction']);
   }
 
   private mapOrderType(orderType: string): 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT' {

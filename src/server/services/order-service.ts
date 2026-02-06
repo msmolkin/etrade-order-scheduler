@@ -13,7 +13,7 @@ export class OrderService {
         id, account_id, symbol, security_type, option_symbol, option_type,
         strike_price, expiration_date, action, order_type, quantity,
         limit_price, stop_price, preferred_duration, actual_duration,
-        requires_daily, session_time, scheduled_for, schedule_enabled,
+        requires_daily, session_time, scheduled_for, schedule_enabled, schedule_once,
         status, retry_count, max_retries, created_at, updated_at, notes,
         threshold_enabled, threshold_price, threshold_price_source, threshold_quantity,
         threshold_poll_interval_ms, threshold_log_file, sell_order_enabled,
@@ -22,7 +22,7 @@ export class OrderService {
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
         $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-        $30, $31, $32, $33, $34, $35, $36
+        $30, $31, $32, $33, $34, $35, $36, $37
       ) RETURNING *`,
       [
         id,
@@ -44,6 +44,7 @@ export class OrderService {
         order.sessionTime,
         order.scheduledFor,
         order.scheduleEnabled,
+        order.scheduleOnce ?? false,
         order.status,
         order.retryCount,
         order.maxRetries,
@@ -206,6 +207,13 @@ export class OrderService {
     );
   }
 
+  async updateOrderExpiration(id: string, expirationDate: Date): Promise<void> {
+    await query(
+      'UPDATE orders SET expiration_date = $2 WHERE id = $1',
+      [id, expirationDate]
+    );
+  }
+
   async incrementRetryCount(id: string): Promise<number> {
     const result = await query<{ retry_count: number }>(
       'UPDATE orders SET retry_count = retry_count + 1 WHERE id = $1 RETURNING retry_count',
@@ -332,6 +340,7 @@ export class OrderService {
       sessionTime: row.session_time,
       scheduledFor: row.scheduled_for,
       scheduleEnabled: row.schedule_enabled,
+      scheduleOnce: row.schedule_once ?? false,
       status: row.status,
       etradeOrderId: row.etrade_order_id,
       submittedAt: row.submitted_at,

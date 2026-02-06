@@ -192,6 +192,7 @@ server.listen(port, async () => {
   console.log('  DELETE /api/orders/:id');
   console.log('  POST   /api/orders/:id/resend');
   console.log('  GET    /api/orders/expired');
+  console.log('  GET    /api/orders/market/option-expirations');
   console.log('  GET    /api/orders/market/options-chain');
   console.log('  GET    /api/orders/market/quote');
   console.log('  GET    /api/symbols/search');

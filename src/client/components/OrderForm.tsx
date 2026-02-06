@@ -2,6 +2,7 @@ import React, { useEffect, useState, useRef } from 'react';
 import {
   createOrder,
   fetchAccounts,
+  fetchOptionExpirations,
   fetchQuote,
   searchSymbols,
   type TradingAccount,
@@ -25,6 +26,7 @@ export type OrderFormDraft = Partial<{
   actualDuration: string;
   sessionTime: string;
   scheduleEnabled: boolean;
+  scheduleOnce: boolean;
   scheduledFor: string;
 }>;
 
@@ -50,6 +52,7 @@ const initialFormState = {
   sessionTime: 'MARKET',
   scheduledFor: '',
   scheduleEnabled: false,
+  scheduleOnce: false,
   notes: '',
   thresholdEnabled: false,
   thresholdPrice: '',
@@ -107,6 +110,9 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
   const [symbolSearchError, setSymbolSearchError] = useState('');
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
   const symbolInputRef = useRef<HTMLDivElement>(null);
+  const [optionExpirations, setOptionExpirations] = useState<string[]>([]);
+  const [optionExpirationsLoading, setOptionExpirationsLoading] = useState(false);
+  const [optionExpirationsError, setOptionExpirationsError] = useState('');
 
   useEffect(() => {
     const loadAccounts = async () => {
@@ -143,6 +149,55 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
     loadAccounts();
   }, []);
 
+  // Fetch real option expiration dates when symbol is set and security type is OPTION
+  useEffect(() => {
+    const symbol = formData.symbol.trim();
+    if (formData.securityType !== 'OPTION' || !symbol) {
+      setOptionExpirations([]);
+      setOptionExpirationsError('');
+      return;
+    }
+
+    let cancelled = false;
+    setOptionExpirationsLoading(true);
+    setOptionExpirationsError('');
+
+    fetchOptionExpirations(symbol)
+      .then((dates) => {
+        if (!cancelled) {
+          setOptionExpirations(dates);
+          setOptionExpirationsError('');
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setOptionExpirations([]);
+          setOptionExpirationsError(err.message || 'Failed to load expirations');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setOptionExpirationsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [formData.securityType, formData.symbol]);
+
+  // When option expirations load, clear expirationDate if it's not in the list
+  useEffect(() => {
+    if (
+      formData.securityType !== 'OPTION' ||
+      optionExpirations.length === 0 ||
+      !formData.expirationDate
+    )
+      return;
+    const valid = optionExpirations.includes(formData.expirationDate);
+    if (!valid) {
+      setFormData((prev) => ({ ...prev, expirationDate: '' }));
+    }
+  }, [optionExpirations, formData.securityType, formData.expirationDate]);
+
   // Apply external draft pre-fill when it changes
   useEffect(() => {
     if (!draft) return;
@@ -167,6 +222,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
       actualDuration: draft.actualDuration ?? prev.actualDuration,
       sessionTime: draft.sessionTime ?? prev.sessionTime,
       scheduleEnabled: draft.scheduleEnabled ?? prev.scheduleEnabled,
+      scheduleOnce: draft.scheduleOnce ?? prev.scheduleOnce,
       scheduledFor: draft.scheduledFor ?? prev.scheduledFor,
       notes: draft.notes ?? prev.notes,
     }));
@@ -254,6 +310,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
 
     if (!shouldAutoPrice) {
       setAutoPricing(false);
+      setAutoPricingError('');
       return;
     }
 
@@ -285,7 +342,12 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
         }
       } catch (err: any) {
         if (!cancelled) {
-          setAutoPricingError(err.message || 'Failed to fetch live price for limit order');
+          const msg = err?.message ?? '';
+          setAutoPricingError(
+            msg === 'Failed to fetch'
+              ? 'Could not reach server for live price. Enter limit price manually.'
+              : msg || 'Failed to fetch live price for limit order'
+          );
         }
       } finally {
         if (!cancelled) {
@@ -316,7 +378,9 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
         stopPrice: formData.stopPrice ? parseFloat(formData.stopPrice) : undefined,
         strikePrice: formData.strikePrice ? parseFloat(formData.strikePrice) : undefined,
         expirationDate: formData.expirationDate
-          ? new Date(formData.expirationDate)
+          ? (formData.expirationDate.match(/^\d{4}-\d{2}-\d{2}$/)
+              ? formData.expirationDate
+              : new Date(formData.expirationDate).toISOString().slice(0, 10))
           : undefined,
         scheduledFor: formData.scheduledFor ? new Date(formData.scheduledFor).toISOString() : undefined,
         requiresDaily: formData.preferredDuration !== formData.actualDuration,
@@ -339,6 +403,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
 
       await createOrder(orderData);
       setSuccess(true);
+      setAutoPricingError('');
 
       const draftForHistory: OrderFormDraft = {
         accountId: formData.accountId,
@@ -356,6 +421,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
         actualDuration: formData.actualDuration,
         sessionTime: formData.sessionTime,
         scheduleEnabled: formData.scheduleEnabled,
+        scheduleOnce: formData.scheduleOnce,
         scheduledFor: formData.scheduledFor || undefined,
         notes: formData.notes || undefined,
       };
@@ -604,17 +670,37 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
                 <label className="block text-xs font-medium text-slate-400 mb-1">
                   Expiration
                 </label>
-                <input
-                  type="date"
-                  value={formData.expirationDate}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      expirationDate: e.target.value,
-                    })
-                  }
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                />
+                {optionExpirationsLoading ? (
+                  <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-slate-400 text-sm">
+                    Loading expirations…
+                  </div>
+                ) : optionExpirationsError ? (
+                  <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-amber-400 text-sm">
+                    {optionExpirationsError}
+                  </div>
+                ) : optionExpirations.length > 0 ? (
+                  <select
+                    value={formData.expirationDate}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        expirationDate: e.target.value,
+                      })
+                    }
+                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="">Select expiration</option>
+                    {optionExpirations.map((date) => (
+                      <option key={date} value={date}>
+                        {date}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-slate-400 text-sm">
+                    Enter a symbol and select Option to load expirations
+                  </div>
+                )}
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1">
@@ -1029,17 +1115,30 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
           </div>
 
           {formData.scheduleEnabled && (
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">
-                Schedule for
-              </label>
-              <input
-                type="datetime-local"
-                value={formData.scheduledFor}
-                onChange={(e) => setFormData({ ...formData, scheduledFor: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-              />
-            </div>
+            <>
+              <div>
+                <label className="flex items-center gap-2 text-slate-400 text-xs font-medium">
+                  <input
+                    type="checkbox"
+                    checked={formData.scheduleOnce}
+                    onChange={(e) => setFormData({ ...formData, scheduleOnce: e.target.checked })}
+                    className="w-4 h-4"
+                  />
+                  Schedule only once (run at chosen time once; do not repeat daily)
+                </label>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">
+                  Schedule for
+                </label>
+                <input
+                  type="datetime-local"
+                  value={formData.scheduledFor}
+                  onChange={(e) => setFormData({ ...formData, scheduledFor: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            </>
           )}
         </section>
 

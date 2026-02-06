@@ -8,6 +8,21 @@ import type { Order, SessionTime } from '../../shared/types/index.js';
 
 const router = Router();
 
+/** Parse option expiration as date-only (YYYY-MM-DD) to avoid timezone/format bugs. Returns Date at noon UTC or undefined. */
+function parseExpirationDateOnly(value: unknown): Date | undefined {
+  if (value == null || value === '') return undefined;
+  const s = typeof value === 'string' ? value : String(value);
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!match) return undefined;
+  const [, y, m, d] = match;
+  const year = parseInt(y!, 10);
+  const month = parseInt(m!, 10) - 1;
+  const day = parseInt(d!, 10);
+  if (month < 0 || month > 11 || day < 1 || day > 31) return undefined;
+  const date = new Date(Date.UTC(year, month, day, 12, 0, 0, 0));
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
 /** Next scheduled time (next trading day) in scheduler timezone: 7:00 for EXTENDED, 9:30 for MARKET. */
 function getNextScheduledTime(sessionTime: SessionTime): Date {
   const tz = process.env.SCHEDULER_TIMEZONE || 'America/New_York';
@@ -174,10 +189,11 @@ router.post('/', async (req, res) => {
       actualDuration: raw.actualDuration as Order['actualDuration'],
       sessionTime: raw.sessionTime as SessionTime,
       scheduleEnabled: Boolean(raw.scheduleEnabled),
+      scheduleOnce: Boolean(raw.scheduleOnce),
       limitPrice: raw.limitPrice != null && raw.limitPrice !== '' ? Number(raw.limitPrice) : undefined,
       stopPrice: raw.stopPrice != null && raw.stopPrice !== '' ? Number(raw.stopPrice) : undefined,
       strikePrice: raw.strikePrice != null && raw.strikePrice !== '' ? Number(raw.strikePrice) : undefined,
-      expirationDate: raw.expirationDate ? new Date(raw.expirationDate as string) : undefined,
+      expirationDate: parseExpirationDateOnly(raw.expirationDate) ?? (raw.expirationDate ? new Date(raw.expirationDate as string) : undefined),
       optionSymbol: raw.optionSymbol != null && raw.optionSymbol !== '' ? String(raw.optionSymbol) : undefined,
       optionType: raw.optionType as Order['optionType'] | undefined,
       notes: raw.notes != null && raw.notes !== '' ? String(raw.notes) : undefined,
@@ -344,10 +360,17 @@ router.post('/:id/submit', async (req, res) => {
 // Update order
 router.patch('/:id', async (req, res) => {
   try {
-    const { status, ...details } = req.body;
+    const { status, expirationDate: rawExpiration, ...details } = req.body;
 
     if (status) {
       await orderService.updateOrderStatus(req.params.id, status, details);
+    }
+
+    if (rawExpiration !== undefined) {
+      const expirationDate = parseExpirationDateOnly(rawExpiration);
+      if (expirationDate) {
+        await orderService.updateOrderExpiration(req.params.id, expirationDate);
+      }
     }
 
     const order = await orderService.getOrder(req.params.id);
@@ -362,6 +385,28 @@ router.delete('/:id', async (req, res) => {
   try {
     await orderService.deleteOrder(req.params.id);
     res.status(204).send();
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get option expiration dates only (for order form dropdown)
+router.get('/market/option-expirations', async (req, res) => {
+  try {
+    const { symbol } = req.query;
+
+    if (!symbol) {
+      return res.status(400).json({ error: 'Symbol is required' });
+    }
+
+    const client = getETradeClient();
+    const rawDates = await client.getOptionExpireDates(symbol as string);
+    const expirationDates = rawDates.map(
+      (d) =>
+        `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}`
+    );
+
+    res.json({ expirationDates });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
