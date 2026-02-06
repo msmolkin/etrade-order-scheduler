@@ -2,6 +2,7 @@ import { Router } from 'express';
 import OAuth from 'oauth-1.0a';
 import crypto from 'crypto';
 import axios from 'axios';
+import dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 import puppeteer from 'puppeteer';
@@ -358,6 +359,16 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // Automated OAuth flow using Puppeteer
 // Uses E*TRADE credentials from env vars or request body
 // Saves cookies to persist session across runs
+// Reload .env so server uses new E*TRADE tokens without restart (getETradeClient reads process.env each time)
+router.post('/reload-env', (req, res) => {
+  try {
+    dotenv.config();
+    res.json({ ok: true, message: 'Environment reloaded. New tokens will be used on next request.' });
+  } catch (error: any) {
+    res.status(500).json({ ok: false, error: error?.message ?? 'Failed to reload .env' });
+  }
+});
+
 router.post('/auto', async (req, res) => {
   const username = req.body.username || process.env.ETRADE_USERNAME;
   const password = req.body.password || process.env.ETRADE_PASSWORD;

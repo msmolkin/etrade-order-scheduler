@@ -22,7 +22,7 @@ npm run oauth # sandbox mode
 ETRADE_SANDBOX=false npm run oauth # production mode
 ```
 
-**If you see "E*TRADE session expired or invalid" (401):** Access tokens expire at end of day Eastern time or after 2 hours of inactivity. Re-run the OAuth flow above (same mode as your app, e.g. `ETRADE_SANDBOX=false npm run oauth` for production), then restart the server.
+**If you see "E*TRADE session expired or invalid" (401):** Access tokens expire at end of day Eastern time or after 2 hours of inactivity. Re-run the OAuth flow above (same mode as your app, e.g. `ETRADE_SANDBOX=false npm run oauth` for production), then update `.env` with the new tokens. You do **not** need to restart: call `POST /api/auth/reload-env` (e.g. `curl -X POST http://localhost:3001/api/auth/reload-env`) so the server uses new tokens on the next request; the scheduler re-reads `.env` on each run and will use new tokens within about 30 seconds (due-orders cycle).
 
 **If the app uses sandbox when you want production:** Your `.env` has `ETRADE_SANDBOX=true`, so `npm run dev` uses sandbox tokens unless you override it. Either run `ETRADE_SANDBOX=false npm run dev`, or set `ETRADE_SANDBOX=false` in `.env` so production is used by default. Check the server startup log: it prints `E*TRADE: SANDBOX` or `E*TRADE: PRODUCTION` so you can confirm which tokens are in use.
 

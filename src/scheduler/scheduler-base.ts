@@ -1,9 +1,30 @@
 import { v4 as uuidv4 } from 'uuid';
+import dotenv from 'dotenv';
 import { OrderService } from '../server/services/order-service.js';
 import { OrderExecutor } from '../server/services/order-executor.js';
 import { ETradeClient } from '../server/services/etrade-client.js';
 import type { SessionTime, Order } from '../shared/types/index.js';
 import { log as schedulerLog, error as schedulerError } from './logger.js';
+
+function getEtradeCredentialsFromEnv(): { credentials: { consumerKey: string; consumerSecret: string; accessToken?: string; accessTokenSecret?: string }; isSandbox: boolean } {
+  const isSandbox = process.env.ETRADE_SANDBOX === 'true';
+  return {
+    credentials: isSandbox
+      ? {
+          consumerKey: process.env.ETRADE_SANDBOX_KEY!,
+          consumerSecret: process.env.ETRADE_SANDBOX_SECRET!,
+          accessToken: process.env.ETRADE_SANDBOX_ACCESS_TOKEN,
+          accessTokenSecret: process.env.ETRADE_SANDBOX_ACCESS_TOKEN_SECRET,
+        }
+      : {
+          consumerKey: process.env.ETRADE_CONSUMER_KEY!,
+          consumerSecret: process.env.ETRADE_CONSUMER_SECRET!,
+          accessToken: process.env.ETRADE_ACCESS_TOKEN,
+          accessTokenSecret: process.env.ETRADE_ACCESS_TOKEN_SECRET,
+        },
+    isSandbox,
+  };
+}
 
 export abstract class SchedulerBase {
   protected schedulerId: string;
@@ -14,23 +35,22 @@ export abstract class SchedulerBase {
   constructor() {
     this.schedulerId = uuidv4();
     this.orderService = new OrderService();
+    const { credentials, isSandbox } = getEtradeCredentialsFromEnv();
+    this.etradeClient = new ETradeClient(credentials, isSandbox);
+    this.orderExecutor = new OrderExecutor(this.etradeClient, this.orderService);
+  }
 
-    // Initialize E*TRADE client
-    this.etradeClient = new ETradeClient(
-      {
-        consumerKey: process.env.ETRADE_CONSUMER_KEY!,
-        consumerSecret: process.env.ETRADE_CONSUMER_SECRET!,
-        accessToken: process.env.ETRADE_ACCESS_TOKEN,
-        accessTokenSecret: process.env.ETRADE_ACCESS_TOKEN_SECRET,
-      },
-      process.env.ETRADE_SANDBOX === 'true'
-    );
-
+  /** Re-read .env and recreate E*TRADE client/executor so new tokens are used without restart. */
+  protected refreshCredentials(): void {
+    dotenv.config();
+    const { credentials, isSandbox } = getEtradeCredentialsFromEnv();
+    this.etradeClient = new ETradeClient(credentials, isSandbox);
     this.orderExecutor = new OrderExecutor(this.etradeClient, this.orderService);
   }
 
   protected async processScheduledOrders(sessionTime: SessionTime): Promise<void> {
     const startTime = Date.now();
+    this.refreshCredentials();
     schedulerLog(`[${this.schedulerId}] Processing ${sessionTime} orders...`);
 
     try {
@@ -60,6 +80,7 @@ export abstract class SchedulerBase {
 
   /** Process orders whose scheduled_time has passed (arbitrary-time scheduling, e.g. "in 30 seconds"). */
   protected async processDueOrders(): Promise<void> {
+    this.refreshCredentials();
     try {
       await this.orderService.cleanupExpiredLocks();
       const orders = await this.orderService.getOrdersDueByTime(new Date());
@@ -178,6 +199,7 @@ export abstract class SchedulerBase {
   }
 
   protected async verifyRecentOrders(): Promise<void> {
+    this.refreshCredentials();
     try {
       // Get orders submitted in the last 24 hours
       const recentOrders = await this.orderService.getOrders({

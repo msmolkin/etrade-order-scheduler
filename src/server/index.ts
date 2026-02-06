@@ -180,6 +180,7 @@ server.listen(port, async () => {
   console.log('  GET    /api/auth/start');
   console.log('  GET    /api/auth/callback');
   console.log('  POST   /api/auth/verify');
+  console.log('  POST   /api/auth/reload-env  (reload .env so new E*TRADE tokens used without restart)');
   console.log('  POST   /api/auth/auto');
   console.log('  GET    /api/accounts');
   console.log('  GET    /api/positions');
