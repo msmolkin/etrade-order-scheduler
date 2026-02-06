@@ -22,6 +22,8 @@
     "test-overnight-session": "tsx src/scripts/test-overnight-market-session.ts",
     "web:overnight-preview-place": "tsx src/scripts/webapitrd-overnight-preview-and-place.ts",
     "silver-price-order": "tsx src/scripts/silver-price-order.ts",
+    "sezl:short:caffeinated": "caffeinate -s -i tsx src/scripts/sezl-short-caffeinated.ts",
+    "sezl:short:caffeinated:sleep": "caffeinate -s -i tsx src/scripts/sezl-short-caffeinated.ts; h=$(date +%H); h=$((h+0)); [ $h -ge 20 ] && pmset sleepnow",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
