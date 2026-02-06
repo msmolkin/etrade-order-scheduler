@@ -85,6 +85,15 @@ export default function OrderList() {
     return colors[status] || 'bg-gray-500/20 text-gray-400';
   };
 
+  /** Normalize expiration to YYYY-MM-DD for display (handles ISO strings from API). */
+  const formatExpiration = (exp: string | undefined | null): string => {
+    if (exp == null || exp === '') return '—';
+    const s = String(exp);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? '—' : d.toISOString().slice(0, 10);
+  };
+
   if (loading) {
     return <div className="text-center py-8 text-slate-400">Loading orders...</div>;
   }
@@ -140,6 +149,11 @@ export default function OrderList() {
                 <div className="flex-1">
                   <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mb-2">
                     <h3 className="text-lg font-semibold text-white">{order.symbol}</h3>
+                    {order.securityType === 'OPTION' && (
+                      <span className="px-2 py-0.5 text-xs rounded bg-indigo-500/20 text-indigo-300">
+                        Option
+                      </span>
+                    )}
                     <span aria-hidden="true" className="text-slate-500 select-none">·</span>
                     <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(order.status)}`}>
                       {order.status}
@@ -153,6 +167,14 @@ export default function OrderList() {
                       </>
                     )}
                   </div>
+                  {order.securityType === 'OPTION' && (
+                    <div className="text-sm text-slate-300 mb-2">
+                      <span className="text-slate-500">Option:</span>{' '}
+                      {order.optionType ?? '—'}{' '}
+                      {order.strikePrice != null ? `$${order.strikePrice}` : '—'} exp{' '}
+                      {formatExpiration(order.expirationDate)}
+                    </div>
+                  )}
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm text-slate-400">
                     <div>
                       <span className="text-slate-500">Action:</span> {order.action}
