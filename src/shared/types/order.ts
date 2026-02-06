@@ -35,6 +35,8 @@ export interface Order {
   // Scheduling
   scheduledFor?: Date;
   scheduleEnabled: boolean;
+  /** When true, order runs once at scheduledFor and is never rescheduled (e.g. "run at 2:45 today only"). */
+  scheduleOnce?: boolean;
 
   // Status tracking
   status: OrderStatus;

@@ -701,6 +701,51 @@ export class ETradeClient {
   }
 
   /**
+   * Same as getOptionChainForExpiry but centers strikes around the given strikePriceNear
+   * (e.g. when underlying quote is unavailable or you want a specific strike in range).
+   */
+  async getOptionChainForExpiryWithStrikeNear(
+    symbol: string,
+    expiryYear: number,
+    expiryMonth: number,
+    expiryDay: number,
+    strikePriceNear: number
+  ): Promise<Array<{
+    strikePrice: number;
+    call?: { osiKey: string; openInterest: number; bid: number; ask: number; volume: number };
+    put?: { osiKey: string; openInterest: number; bid: number; ask: number; volume: number };
+  }>> {
+    const monthStr = String(expiryMonth).padStart(2, '0');
+    const url = `${this.baseUrl}/v1/market/optionchains?symbol=${symbol}&expiryYear=${expiryYear}&expiryMonth=${monthStr}&expiryDay=${expiryDay}&strikePriceNear=${Math.round(strikePriceNear)}&noOfStrikes=100`;
+    const headers = this.getAuthHeader(url);
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers: headers as any });
+    const chain = response.data?.OptionChainResponse || response.data?.optionChainResponse;
+    const pairs = chain?.OptionPair || chain?.optionPairs || [];
+    return pairs.map((pair: any) => {
+      const call = pair.Call || pair.call;
+      const put = pair.Put || pair.put;
+      const strike = call?.strikePrice ?? put?.strikePrice ?? call?.StrikePrice ?? put?.StrikePrice;
+      return {
+        strikePrice: Number(strike),
+        call: call ? {
+          osiKey: call.osiKey ?? call.OsiKey ?? '',
+          openInterest: Number(call.openInterest ?? call.OpenInterest ?? 0),
+          bid: Number(call.bid ?? call.Bid ?? 0),
+          ask: Number(call.ask ?? call.Ask ?? 0),
+          volume: Number(call.volume ?? call.Volume ?? 0),
+        } : undefined,
+        put: put ? {
+          osiKey: put.osiKey ?? put.OsiKey ?? '',
+          openInterest: Number(put.openInterest ?? put.OpenInterest ?? 0),
+          bid: Number(put.bid ?? put.Bid ?? 0),
+          ask: Number(put.ask ?? put.Ask ?? 0),
+          volume: Number(put.volume ?? put.Volume ?? 0),
+        } : undefined,
+      };
+    }).filter((p: any) => !isNaN(p.strikePrice)).sort((a: any, b: any) => a.strikePrice - b.strikePrice);
+  }
+
+  /**
    * Fetch option chain for a specific expiry and strike (per E*TRADE Market API).
    * Returns the osiKey for the call/put at the given strike, or null if not found.
    * Use getOptionExpireDates() to get valid expiry dates first.

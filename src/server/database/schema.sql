@@ -189,4 +189,10 @@ BEGIN
                  WHERE table_name = 'orders' AND column_name = 'sell_order_triggered_by_order_id') THEN
     ALTER TABLE orders ADD COLUMN sell_order_triggered_by_order_id UUID REFERENCES orders(id) ON DELETE SET NULL;
   END IF;
+
+  -- Add schedule_once (run at scheduled time once, do not reschedule daily)
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                 WHERE table_name = 'orders' AND column_name = 'schedule_once') THEN
+    ALTER TABLE orders ADD COLUMN schedule_once BOOLEAN NOT NULL DEFAULT false;
+  END IF;
 END $$;

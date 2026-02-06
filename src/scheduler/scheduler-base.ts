@@ -70,8 +70,8 @@ export abstract class SchedulerBase {
       const elapsed = Date.now() - startTime;
       schedulerLog(`[${this.schedulerId}] Execution complete: ${successful} successful, ${failed} failed (${elapsed}ms)`);
 
-      // For orders that require daily placement, reschedule them
-      await this.rescheduleRecurringOrders(orders.filter((o) => o.requiresDaily));
+      // For orders that require daily placement and are not one-time, reschedule them
+      await this.rescheduleRecurringOrders(orders.filter((o) => o.requiresDaily && !o.scheduleOnce));
     } catch (error: any) {
       const errMsg = `[${this.schedulerId}] Error processing scheduled orders: ${error?.message ?? error}`;
       schedulerError(errMsg, error);
@@ -88,7 +88,7 @@ export abstract class SchedulerBase {
       schedulerLog(`[${this.schedulerId}] Due-orders check: ${orders.length} order(s) due`);
       const results = await this.executeBatch(orders, 5);
       const successful = results.filter((r) => r).length;
-      await this.rescheduleRecurringOrders(orders.filter((o) => o.requiresDaily));
+      await this.rescheduleRecurringOrders(orders.filter((o) => o.requiresDaily && !o.scheduleOnce));
       schedulerLog(`[${this.schedulerId}] Due-orders complete: ${successful}/${orders.length} successful`);
     } catch (error: any) {
       schedulerError(`[${this.schedulerId}] processDueOrders: ${error?.message ?? error}`, error);
