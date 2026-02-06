@@ -17,6 +17,10 @@
     "oauth": "tsx src/scripts/oauth-flow.ts",
     "execute:xom-test-order": "tsx src/scripts/execute-xom-order.ts",
     "execute:wulf-test-order": "tsx src/scripts/execute-wulf-order.ts",
+    "slv-overnight": "tsx src/scripts/send-slv-overnight-order.ts",
+    "test-overnight-session": "tsx src/scripts/test-overnight-market-session.ts",
+    "web:overnight-preview-place": "tsx src/scripts/webapitrd-overnight-preview-and-place.ts",
+    "silver-price-order": "tsx src/scripts/silver-price-order.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [
