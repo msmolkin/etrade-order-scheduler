@@ -121,6 +121,10 @@ export function removeFromOrderHistory(id: string): OrderHistoryItem[] {
   return items;
 }
 
+export function clearOrderHistory(): void {
+  saveOrderHistory([]);
+}
+
 export function getHistoryItemLabel(item: OrderHistoryItem): string {
   const d = item.draft;
   const sym = d.symbol || '?';
