@@ -8,21 +8,29 @@ import {
   type SymbolSearchResult,
 } from '../utils/api';
 
-type OrderFormDraft = Partial<{
+export type OrderFormDraft = Partial<{
+  accountId: string;
   symbol: string;
   action: string;
   orderType: string;
   quantity: number;
   limitPrice: string;
+  stopPrice: string;
   notes: string;
   securityType: 'EQUITY' | 'OPTION';
   optionType: 'CALL' | 'PUT';
   strikePrice: number;
   expirationDate: string;
+  preferredDuration: string;
+  actualDuration: string;
+  sessionTime: string;
+  scheduleEnabled: boolean;
+  scheduledFor: string;
 }>;
 
 interface OrderFormProps {
   draft?: OrderFormDraft;
+  onOrderCreated?: (draft: OrderFormDraft) => void;
 }
 
 const initialFormState = {
@@ -55,7 +63,7 @@ const initialFormState = {
   sellOrderQuantity: 1,
 };
 
-export default function OrderForm({ draft }: OrderFormProps) {
+export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
   const [formData, setFormData] = useState({
     accountId: '',
     symbol: '',
@@ -141,6 +149,7 @@ export default function OrderForm({ draft }: OrderFormProps) {
 
     setFormData((prev) => ({
       ...prev,
+      accountId: draft.accountId ?? prev.accountId,
       symbol: draft.symbol ?? prev.symbol,
       securityType: draft.securityType ?? prev.securityType,
       optionType: draft.optionType ?? prev.optionType,
@@ -153,6 +162,12 @@ export default function OrderForm({ draft }: OrderFormProps) {
       orderType: draft.orderType ?? prev.orderType,
       quantity: draft.quantity ?? prev.quantity,
       limitPrice: draft.limitPrice ?? prev.limitPrice,
+      stopPrice: draft.stopPrice ?? prev.stopPrice,
+      preferredDuration: draft.preferredDuration ?? prev.preferredDuration,
+      actualDuration: draft.actualDuration ?? prev.actualDuration,
+      sessionTime: draft.sessionTime ?? prev.sessionTime,
+      scheduleEnabled: draft.scheduleEnabled ?? prev.scheduleEnabled,
+      scheduledFor: draft.scheduledFor ?? prev.scheduledFor,
       notes: draft.notes ?? prev.notes,
     }));
   }, [draft]);
@@ -324,6 +339,27 @@ export default function OrderForm({ draft }: OrderFormProps) {
 
       await createOrder(orderData);
       setSuccess(true);
+
+      const draftForHistory: OrderFormDraft = {
+        accountId: formData.accountId,
+        symbol: formData.symbol,
+        securityType: formData.securityType,
+        optionType: formData.optionType,
+        strikePrice: formData.strikePrice ? parseFloat(formData.strikePrice) : undefined,
+        expirationDate: formData.expirationDate || undefined,
+        action: formData.action,
+        orderType: formData.orderType,
+        quantity: typeof formData.quantity === 'number' ? formData.quantity : parseInt(String(formData.quantity), 10),
+        limitPrice: formData.limitPrice || undefined,
+        stopPrice: formData.stopPrice || undefined,
+        preferredDuration: formData.preferredDuration,
+        actualDuration: formData.actualDuration,
+        sessionTime: formData.sessionTime,
+        scheduleEnabled: formData.scheduleEnabled,
+        scheduledFor: formData.scheduledFor || undefined,
+        notes: formData.notes || undefined,
+      };
+      onOrderCreated?.(draftForHistory);
 
       // Reset form
       setFormData({
