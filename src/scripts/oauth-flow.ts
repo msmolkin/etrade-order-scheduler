@@ -225,25 +225,63 @@ async function main() {
     : undefined;
   const saveTokens = process.env.ETRADE_SAVE_TOKENS === 'y' || process.env.ETRADE_SAVE_TOKENS === 'yes';
 
-  // Phase 2: complete with verifier from env (non-interactive)
-  if (phase === '2' && verifierFromEnv) {
-    try {
+  // Phase 2: complete with verifier (from env or interactive prompt if env fails/missing)
+  if (phase === '2') {
+    let verifierToUse = verifierFromEnv;
+    const isInteractive = process.stdin.isTTY;
+
+    const runPhase2 = async (verifier: string): Promise<void> => {
       const raw = fs.readFileSync(REQUEST_TOKEN_FILE, 'utf-8');
       const { token: requestToken, tokenSecret: requestTokenSecret, isSandbox } = JSON.parse(raw);
       const { accessToken, accessTokenSecret } = await getAccessToken(
         requestToken,
         requestTokenSecret,
-        verifierFromEnv.trim()
+        verifier.trim()
       );
       updateEnvFile(accessToken, accessTokenSecret, isSandbox);
       fs.unlinkSync(REQUEST_TOKEN_FILE);
       console.log('✓ Tokens saved to .env file');
       console.log('OAuth setup complete.');
-      process.exit(0);
-    } catch (error: any) {
-      console.error('Error completing OAuth:', error.response?.data || error.message);
-      process.exit(1);
+    };
+
+    // Try env verifier first if set
+    if (verifierToUse) {
+      try {
+        await runPhase2(verifierToUse);
+        process.exit(0);
+        return;
+      } catch (error: any) {
+        console.error('Error completing OAuth with ETRADE_VERIFIER:', error.response?.data || error.message);
+        if (!isInteractive) {
+          process.exit(1);
+          return;
+        }
+        verifierToUse = undefined;
+      }
     }
+
+    // No verifier or env attempt failed: in interactive shell, ask for code or cancel
+    if (isInteractive) {
+      const input = await prompt('\nEnter verification code (or press Enter to cancel): ');
+      if (!input) {
+        console.log('Cancelled. No changes made.');
+        process.exit(0);
+        return;
+      }
+      try {
+        await runPhase2(input);
+        process.exit(0);
+        return;
+      } catch (error: any) {
+        console.error('Error completing OAuth:', error.response?.data || error.message);
+        process.exit(1);
+        return;
+      }
+    }
+
+    // Phase 2, not interactive, no working verifier
+    console.error('ETRADE_VERIFIER not set or invalid. Set ETRADE_VERIFIER=<code> or run in an interactive shell to enter the code.');
+    process.exit(1);
     return;
   }
 
