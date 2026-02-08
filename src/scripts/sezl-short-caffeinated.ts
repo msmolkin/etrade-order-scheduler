@@ -21,7 +21,7 @@ import type { ETradeCredentials, ETradeOrderRequest } from '../shared/types/inde
 dotenv.config({ quiet: true });
 
 const SYMBOL = 'SEZL';
-const LIMIT_PRICE = 68.05;
+const LIMIT_PRICE = 67.95;
 const SHARES_PER_ORDER = 10;
 const TOTAL_ORDERS = 10;
 const POLL_INTERVAL_MS = 15_000;
@@ -208,7 +208,7 @@ async function main() {
         break;
       }
       if (['CANCELLED', 'REJECTED', 'EXPIRED'].includes(status)) {
-        console.error(`  Order ${status}. Stopping.`);
+        console.error(`  Order ${status.toLowerCase()}. Stopping.`);
         process.exit(1);
       }
     }
