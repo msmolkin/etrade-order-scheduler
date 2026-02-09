@@ -6,6 +6,7 @@ export type OrderStatus = 'PENDING' | 'SCHEDULED' | 'SUBMITTED' | 'FILLED' | 'PA
 export type SecurityType = 'EQUITY' | 'OPTION' | 'MUTUAL_FUND' | 'MONEY_MARKET_FUND';
 export type OptionType = 'CALL' | 'PUT';
 export type SessionTime = 'MARKET' | 'EXTENDED';
+export type ScheduleFrequency = 'DAILY' | 'WEEKLY';
 
 export interface Order {
   id: string;
@@ -29,12 +30,13 @@ export interface Order {
   // Duration and scheduling
   preferredDuration: OrderDuration; // What user wants (e.g., GTC)
   actualDuration: OrderDuration;     // What gets placed (e.g., DAY)
-  requiresDaily: boolean;            // True if actualDuration !== preferredDuration
+  requiresDaily: boolean;            // Back-compat: derived from scheduleFrequency
   sessionTime: SessionTime;          // MARKET (9:30) or EXTENDED (7:00)
 
   // Scheduling
   scheduledFor?: Date;
   scheduleEnabled: boolean;
+  scheduleFrequency: ScheduleFrequency;
   /** When true, order runs once at scheduledFor and is never rescheduled (e.g. "run at 2:45 today only"). */
   scheduleOnce?: boolean;
 

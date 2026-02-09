@@ -89,6 +89,13 @@ export default function OrderList() {
     return colors[status] || 'bg-gray-500/20 text-gray-400';
   };
 
+  const getScheduleBadge = (order: Order): string | null => {
+    if (!order.scheduleEnabled) return null;
+    if (order.scheduleOnce) return 'ONCE';
+    if (order.scheduleFrequency === 'WEEKLY') return 'WEEKLY';
+    return 'DAILY';
+  };
+
   /** Normalize expiration to YYYY-MM-DD for display (handles ISO strings from API). */
   const formatExpiration = (exp: string | undefined | null): string => {
     if (exp == null || exp === '') return '—';
@@ -162,11 +169,11 @@ export default function OrderList() {
                     <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(order.status)}`}>
                       {order.status}
                     </span>
-                    {order.requiresDaily && (
+                    {getScheduleBadge(order) && (
                       <>
                         <span aria-hidden="true" className="text-slate-500 select-none">·</span>
                         <span className="px-2 py-1 text-xs rounded-full bg-amber-500/20 text-amber-400">
-                          DAILY
+                          {getScheduleBadge(order)}
                         </span>
                       </>
                     )}
@@ -195,14 +202,14 @@ export default function OrderList() {
                       </div>
                     )}
                     <div>
-                      <span className="text-slate-500">Duration:</span> {order.preferredDuration} → {order.actualDuration}
+                      <span className="text-slate-500">Order term:</span> {order.actualDuration}
                     </div>
                     <div>
                       <span className="text-slate-500">Session:</span> {order.sessionTime}
                     </div>
                     {order.scheduledFor && (
                       <div className="col-span-2">
-                        <span className="text-slate-500">Scheduled:</span>{' '}
+                        <span className="text-slate-500">Next run:</span>{' '}
                         {new Date(order.scheduledFor).toLocaleString()}
                       </div>
                     )}

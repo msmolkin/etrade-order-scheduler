@@ -174,6 +174,10 @@ router.post('/', async (req, res) => {
       thresholdLogFile = `logs/quotes-${symbol}-${timestamp}.csv`;
     }
 
+    const rawScheduleFrequency = String(raw.scheduleFrequency || '').toUpperCase();
+    const scheduleFrequency: Order['scheduleFrequency'] =
+      rawScheduleFrequency === 'WEEKLY' ? 'WEEKLY' : 'DAILY';
+
     const orderData: Omit<
       Order,
       'id' | 'createdAt' | 'updatedAt' | 'status' | 'requiresDaily' | 'retryCount' | 'maxRetries'
@@ -189,6 +193,7 @@ router.post('/', async (req, res) => {
       actualDuration: raw.actualDuration as Order['actualDuration'],
       sessionTime: raw.sessionTime as SessionTime,
       scheduleEnabled: Boolean(raw.scheduleEnabled),
+      scheduleFrequency,
       scheduleOnce: Boolean(raw.scheduleOnce),
       limitPrice: raw.limitPrice != null && raw.limitPrice !== '' ? Number(raw.limitPrice) : undefined,
       stopPrice: raw.stopPrice != null && raw.stopPrice !== '' ? Number(raw.stopPrice) : undefined,
@@ -220,7 +225,7 @@ router.post('/', async (req, res) => {
     }
     (orderData as Record<string, unknown>).scheduledFor = scheduledFor;
 
-    const requiresDaily = orderData.preferredDuration !== orderData.actualDuration;
+    const requiresDaily = orderData.scheduleEnabled && orderData.scheduleFrequency === 'DAILY';
 
     const order = await orderService.createOrder({
       ...orderData,
@@ -260,6 +265,7 @@ router.post('/', async (req, res) => {
 
       sellOrder = await orderService.createOrder({
         ...sellOrderData,
+        status: 'PENDING',
         requiresDaily,
         retryCount: 0,
         maxRetries: Number(raw.maxRetries) || 3,

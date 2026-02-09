@@ -208,6 +208,7 @@ async function sendRGTIOrdersNow() {
         sessionTime: orderSpec.marketSession || 'EXTENDED',
         scheduledFor: undefined,
         scheduleEnabled: false,
+        scheduleFrequency: 'DAILY',
         status: 'PENDING',
         etradeOrderId: undefined,
         submittedAt: undefined,

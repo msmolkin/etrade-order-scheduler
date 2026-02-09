@@ -5,6 +5,7 @@ import {
   fetchOptionExpirations,
   fetchQuote,
   searchSymbols,
+  submitOrder,
   type TradingAccount,
   type SymbolSearchResult,
 } from '../utils/api';
@@ -26,6 +27,7 @@ export type OrderFormDraft = Partial<{
   actualDuration: string;
   sessionTime: string;
   scheduleEnabled: boolean;
+  scheduleFrequency: 'DAILY' | 'WEEKLY';
   scheduleOnce: boolean;
   scheduledFor: string;
 }>;
@@ -35,7 +37,39 @@ interface OrderFormProps {
   onOrderCreated?: (draft: OrderFormDraft) => void;
 }
 
-const initialFormState = {
+type FormState = {
+  accountId: string;
+  symbol: string;
+  securityType: 'EQUITY' | 'OPTION';
+  optionType: 'CALL' | 'PUT';
+  strikePrice: string;
+  expirationDate: string;
+  action: 'BUY' | 'SELL' | 'BUY_TO_COVER' | 'SELL_SHORT';
+  orderType: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT' | 'THRESHOLD';
+  quantity: number | '';
+  limitPrice: string;
+  stopPrice: string;
+  preferredDuration: string;
+  actualDuration: string;
+  sessionTime: 'MARKET' | 'EXTENDED';
+  scheduledFor: string;
+  scheduleEnabled: boolean;
+  scheduleFrequency: 'DAILY' | 'WEEKLY';
+  scheduleOnce: boolean;
+  notes: string;
+  thresholdEnabled: boolean;
+  thresholdPrice: string;
+  thresholdPriceSource: 'BID' | 'ASK' | 'LAST';
+  thresholdQuantity: number;
+  thresholdPollIntervalMs: number;
+  thresholdLogFile: string;
+  sellOrderEnabled: boolean;
+  sellOrderThresholdPrice: string;
+  sellOrderThresholdPriceSource: 'BID' | 'ASK' | 'LAST';
+  sellOrderQuantity: number;
+};
+
+const initialFormState: FormState = {
   accountId: '',
   symbol: '',
   securityType: 'EQUITY',
@@ -47,11 +81,12 @@ const initialFormState = {
   quantity: 1,
   limitPrice: '',
   stopPrice: '',
-  preferredDuration: 'GTC',
+  preferredDuration: 'DAY',
   actualDuration: 'DAY',
-  sessionTime: 'MARKET',
+  sessionTime: 'EXTENDED',
   scheduledFor: '',
-  scheduleEnabled: false,
+  scheduleEnabled: true,
+  scheduleFrequency: 'DAILY',
   scheduleOnce: false,
   notes: '',
   thresholdEnabled: false,
@@ -67,39 +102,12 @@ const initialFormState = {
 };
 
 export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
-  const [formData, setFormData] = useState({
-    accountId: '',
-    symbol: '',
-    securityType: 'EQUITY',
-    optionType: 'CALL' as 'CALL' | 'PUT',
-    strikePrice: '',
-    expirationDate: '',
-    action: 'BUY',
-    orderType: 'LIMIT',
-    quantity: 1,
-    limitPrice: '',
-    stopPrice: '',
-    preferredDuration: 'GTC',
-    actualDuration: 'DAY',
-    sessionTime: 'MARKET',
-    scheduledFor: '',
-    scheduleEnabled: false,
-    notes: '',
-    thresholdEnabled: false,
-    thresholdPrice: '',
-    thresholdPriceSource: 'BID' as 'BID' | 'ASK' | 'LAST',
-    thresholdQuantity: 1,
-    thresholdPollIntervalMs: 1000,
-    thresholdLogFile: '',
-    sellOrderEnabled: false,
-    sellOrderThresholdPrice: '',
-    sellOrderThresholdPriceSource: 'ASK' as 'BID' | 'ASK' | 'LAST',
-    sellOrderQuantity: 1,
-  });
+  const [formData, setFormData] = useState<FormState>(initialFormState);
 
   const [submitting, setSubmitting] = useState(false);
+  const [sendingNow, setSendingNow] = useState(false);
   const [error, setError] = useState('');
-  const [success, setSuccess] = useState(false);
+  const [successMessage, setSuccessMessage] = useState('');
   const [accounts, setAccounts] = useState<TradingAccount[]>([]);
   const [accountsLoading, setAccountsLoading] = useState(false);
   const [accountsError, setAccountsError] = useState('');
@@ -113,6 +121,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
   const [optionExpirations, setOptionExpirations] = useState<string[]>([]);
   const [optionExpirationsLoading, setOptionExpirationsLoading] = useState(false);
   const [optionExpirationsError, setOptionExpirationsError] = useState('');
+  const [scheduledForTouched, setScheduledForTouched] = useState(false);
 
   useEffect(() => {
     const loadAccounts = async () => {
@@ -206,27 +215,84 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
       ...prev,
       accountId: draft.accountId ?? prev.accountId,
       symbol: draft.symbol ?? prev.symbol,
-      securityType: draft.securityType ?? prev.securityType,
-      optionType: draft.optionType ?? prev.optionType,
+      securityType:
+        draft.securityType === 'EQUITY' || draft.securityType === 'OPTION'
+          ? draft.securityType
+          : prev.securityType,
+      optionType:
+        draft.optionType === 'CALL' || draft.optionType === 'PUT'
+          ? draft.optionType
+          : prev.optionType,
       strikePrice:
         draft.strikePrice != null
           ? String(draft.strikePrice)
           : prev.strikePrice,
       expirationDate: draft.expirationDate ?? prev.expirationDate,
-      action: draft.action ?? prev.action,
-      orderType: draft.orderType ?? prev.orderType,
+      action:
+        draft.action === 'BUY' ||
+        draft.action === 'SELL' ||
+        draft.action === 'BUY_TO_COVER' ||
+        draft.action === 'SELL_SHORT'
+          ? draft.action
+          : prev.action,
+      orderType:
+        draft.orderType === 'MARKET' ||
+        draft.orderType === 'LIMIT' ||
+        draft.orderType === 'STOP' ||
+        draft.orderType === 'STOP_LIMIT' ||
+        draft.orderType === 'THRESHOLD'
+          ? draft.orderType
+          : prev.orderType,
       quantity: draft.quantity ?? prev.quantity,
       limitPrice: draft.limitPrice ?? prev.limitPrice,
       stopPrice: draft.stopPrice ?? prev.stopPrice,
       preferredDuration: draft.preferredDuration ?? prev.preferredDuration,
       actualDuration: draft.actualDuration ?? prev.actualDuration,
-      sessionTime: draft.sessionTime ?? prev.sessionTime,
+      sessionTime:
+        draft.sessionTime === 'MARKET' || draft.sessionTime === 'EXTENDED'
+          ? draft.sessionTime
+          : prev.sessionTime,
       scheduleEnabled: draft.scheduleEnabled ?? prev.scheduleEnabled,
+      scheduleFrequency:
+        draft.scheduleFrequency === 'DAILY' || draft.scheduleFrequency === 'WEEKLY'
+          ? draft.scheduleFrequency
+          : prev.scheduleFrequency,
       scheduleOnce: draft.scheduleOnce ?? prev.scheduleOnce,
       scheduledFor: draft.scheduledFor ?? prev.scheduledFor,
       notes: draft.notes ?? prev.notes,
     }));
   }, [draft]);
+
+  const getNextTradingDay = (sessionTime: string): Date => {
+    const next = new Date();
+    const hour = sessionTime === 'EXTENDED' ? 7 : 9;
+    const minute = sessionTime === 'EXTENDED' ? 0 : 30;
+    next.setHours(hour, minute, 0, 0);
+    next.setDate(next.getDate() + 1);
+    const day = next.getDay();
+    if (day === 0) next.setDate(next.getDate() + 1);
+    if (day === 6) next.setDate(next.getDate() + 2);
+    return next;
+  };
+
+  const formatDateTimeLocal = (date: Date): string => {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
+      date.getHours()
+    )}:${pad(date.getMinutes())}`;
+  };
+
+  const getSuggestedScheduleFor = (sessionTime: string): string =>
+    formatDateTimeLocal(getNextTradingDay(sessionTime));
+
+  useEffect(() => {
+    if (!formData.scheduleEnabled) return;
+    if (scheduledForTouched) return;
+    const nextValue = getSuggestedScheduleFor(formData.sessionTime);
+    if (formData.scheduledFor !== nextValue) {
+      setFormData((prev) => ({ ...prev, scheduledFor: nextValue }));
+    }
+  }, [formData.scheduleEnabled, formData.sessionTime, scheduledForTouched]);
 
   // Search for symbols as user types
   useEffect(() => {
@@ -364,68 +430,81 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
     // Re-run when symbol, orderType, or action changes
   }, [formData.symbol, formData.orderType, formData.action]);
 
+  const buildOrderPayload = (overrides?: Partial<typeof formData>) => {
+    const data = { ...formData, ...overrides };
+    const scheduleFrequency = data.scheduleFrequency ?? 'DAILY';
+    const scheduleEnabled = data.scheduleEnabled;
+    return {
+      ...data,
+      quantity: parseInt(data.quantity as any),
+      limitPrice: data.limitPrice ? parseFloat(data.limitPrice) : undefined,
+      stopPrice: data.stopPrice ? parseFloat(data.stopPrice) : undefined,
+      strikePrice: data.strikePrice ? parseFloat(data.strikePrice) : undefined,
+      expirationDate: data.expirationDate
+        ? (data.expirationDate.match(/^\d{4}-\d{2}-\d{2}$/)
+            ? data.expirationDate
+            : new Date(data.expirationDate).toISOString().slice(0, 10))
+        : undefined,
+      scheduledFor:
+        scheduleEnabled && data.scheduledFor
+          ? new Date(data.scheduledFor).toISOString()
+          : undefined,
+      preferredDuration: data.actualDuration,
+      scheduleFrequency,
+      requiresDaily: scheduleEnabled && scheduleFrequency === 'DAILY' && !data.scheduleOnce,
+      status: scheduleEnabled ? 'SCHEDULED' : 'PENDING',
+      retryCount: 0,
+      maxRetries: 3,
+      thresholdEnabled: data.orderType === 'THRESHOLD' || data.thresholdEnabled,
+      thresholdPrice: data.thresholdPrice ? parseFloat(data.thresholdPrice) : undefined,
+      thresholdPriceSource: data.thresholdPriceSource,
+      thresholdQuantity: data.thresholdQuantity,
+      thresholdPollIntervalMs: data.thresholdPollIntervalMs,
+      thresholdLogFile: data.thresholdLogFile || undefined,
+      sellOrderEnabled: data.sellOrderEnabled,
+      sellOrderThresholdPrice: data.sellOrderThresholdPrice
+        ? parseFloat(data.sellOrderThresholdPrice)
+        : undefined,
+      sellOrderThresholdPriceSource: data.sellOrderThresholdPriceSource,
+      sellOrderQuantity: data.sellOrderQuantity,
+    };
+  };
+
+  const buildDraftForHistory = (data: typeof formData): OrderFormDraft => ({
+    accountId: data.accountId,
+    symbol: data.symbol,
+    securityType: data.securityType,
+    optionType: data.optionType,
+    strikePrice: data.strikePrice ? parseFloat(data.strikePrice) : undefined,
+    expirationDate: data.expirationDate || undefined,
+    action: data.action,
+    orderType: data.orderType,
+    quantity: typeof data.quantity === 'number' ? data.quantity : parseInt(String(data.quantity), 10),
+    limitPrice: data.limitPrice || undefined,
+    stopPrice: data.stopPrice || undefined,
+    preferredDuration: data.actualDuration,
+    actualDuration: data.actualDuration,
+    sessionTime: data.sessionTime,
+    scheduleEnabled: data.scheduleEnabled,
+    scheduleFrequency: data.scheduleFrequency,
+    scheduleOnce: data.scheduleOnce,
+    scheduledFor: data.scheduledFor || undefined,
+    notes: data.notes || undefined,
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    setSuccess(false);
+    setSuccessMessage('');
     setSubmitting(true);
 
     try {
-      const orderData = {
-        ...formData,
-        quantity: parseInt(formData.quantity as any),
-        limitPrice: formData.limitPrice ? parseFloat(formData.limitPrice) : undefined,
-        stopPrice: formData.stopPrice ? parseFloat(formData.stopPrice) : undefined,
-        strikePrice: formData.strikePrice ? parseFloat(formData.strikePrice) : undefined,
-        expirationDate: formData.expirationDate
-          ? (formData.expirationDate.match(/^\d{4}-\d{2}-\d{2}$/)
-              ? formData.expirationDate
-              : new Date(formData.expirationDate).toISOString().slice(0, 10))
-          : undefined,
-        scheduledFor: formData.scheduledFor ? new Date(formData.scheduledFor).toISOString() : undefined,
-        requiresDaily: formData.preferredDuration !== formData.actualDuration,
-        status: formData.scheduleEnabled ? 'SCHEDULED' : 'PENDING',
-        retryCount: 0,
-        maxRetries: 3,
-        thresholdEnabled: formData.orderType === 'THRESHOLD' || formData.thresholdEnabled,
-        thresholdPrice: formData.thresholdPrice ? parseFloat(formData.thresholdPrice) : undefined,
-        thresholdPriceSource: formData.thresholdPriceSource,
-        thresholdQuantity: formData.thresholdQuantity,
-        thresholdPollIntervalMs: formData.thresholdPollIntervalMs,
-        thresholdLogFile: formData.thresholdLogFile || undefined,
-        sellOrderEnabled: formData.sellOrderEnabled,
-        sellOrderThresholdPrice: formData.sellOrderThresholdPrice
-          ? parseFloat(formData.sellOrderThresholdPrice)
-          : undefined,
-        sellOrderThresholdPriceSource: formData.sellOrderThresholdPriceSource,
-        sellOrderQuantity: formData.sellOrderQuantity,
-      };
-
+      const orderData = buildOrderPayload();
       await createOrder(orderData);
-      setSuccess(true);
+      setSuccessMessage('Order created successfully!');
       setAutoPricingError('');
 
-      const draftForHistory: OrderFormDraft = {
-        accountId: formData.accountId,
-        symbol: formData.symbol,
-        securityType: formData.securityType,
-        optionType: formData.optionType,
-        strikePrice: formData.strikePrice ? parseFloat(formData.strikePrice) : undefined,
-        expirationDate: formData.expirationDate || undefined,
-        action: formData.action,
-        orderType: formData.orderType,
-        quantity: typeof formData.quantity === 'number' ? formData.quantity : parseInt(String(formData.quantity), 10),
-        limitPrice: formData.limitPrice || undefined,
-        stopPrice: formData.stopPrice || undefined,
-        preferredDuration: formData.preferredDuration,
-        actualDuration: formData.actualDuration,
-        sessionTime: formData.sessionTime,
-        scheduleEnabled: formData.scheduleEnabled,
-        scheduleOnce: formData.scheduleOnce,
-        scheduledFor: formData.scheduledFor || undefined,
-        notes: formData.notes || undefined,
-      };
-      onOrderCreated?.(draftForHistory);
+      onOrderCreated?.(buildDraftForHistory(formData));
 
       // Reset form
       setFormData({
@@ -436,8 +515,49 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
       });
     } catch (err: any) {
       setError(err.message || 'Failed to create order');
+      setSuccessMessage('');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleSendNow = async () => {
+    setError('');
+    setSuccessMessage('');
+    setSendingNow(true);
+
+    try {
+      const orderData = buildOrderPayload({
+        scheduleEnabled: false,
+        scheduleOnce: false,
+        scheduledFor: '',
+      });
+      const created = await createOrder(orderData);
+      onOrderCreated?.(buildDraftForHistory(formData));
+
+      const result = await submitOrder(created.id);
+      if (!result.success) {
+        throw new Error(result.order?.lastError || 'Order submission failed');
+      }
+
+      setSuccessMessage(
+        `Order sent now! E*TRADE Order ID: ${result.order.etradeOrderId || 'Pending'}`
+      );
+      setAutoPricingError('');
+
+      // Reset form
+      setFormData({
+        ...initialFormState,
+        accountId: formData.accountId,
+        thresholdPriceSource: formData.action === 'BUY' ? 'BID' : 'ASK',
+        sellOrderThresholdPriceSource: 'ASK',
+      });
+      setScheduledForTouched(false);
+    } catch (err: any) {
+      setError(err.message || 'Failed to send order now');
+      setSuccessMessage('');
+    } finally {
+      setSendingNow(false);
     }
   };
 
@@ -451,9 +571,9 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
         </div>
       )}
 
-      {success && (
+      {successMessage && (
         <div className="mb-3 p-3 bg-green-500/20 border border-green-500 rounded-lg text-green-400 text-sm">
-          Order created successfully!
+          {successMessage}
         </div>
       )}
 
@@ -730,7 +850,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
             <select
               value={formData.action}
               onChange={(e) => {
-                const newAction = e.target.value;
+                const newAction = e.target.value as FormState['action'];
                 setFormData({
                   ...formData,
                   action: newAction,
@@ -759,7 +879,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
             <select
               value={formData.orderType}
               onChange={(e) => {
-                const newOrderType = e.target.value;
+                const newOrderType = e.target.value as FormState['orderType'];
                 setFormData({
                   ...formData,
                   orderType: newOrderType,
@@ -1049,23 +1169,23 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
           </h3>
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">
-              Preferred duration
+              Placement frequency
             </label>
             <select
-              value={formData.preferredDuration}
-              onChange={(e) => setFormData({ ...formData, preferredDuration: e.target.value })}
+              value={formData.scheduleFrequency}
+              onChange={(e) =>
+                setFormData({ ...formData, scheduleFrequency: e.target.value as 'DAILY' | 'WEEKLY' })
+              }
               className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             >
-              <option value="GTC">GTC (Good Till Cancel)</option>
-              <option value="DAY">DAY</option>
-              <option value="IMMEDIATE_OR_CANCEL">Immediate or Cancel</option>
-              <option value="FILL_OR_KILL">Fill or Kill</option>
+              <option value="DAILY">Every trading day</option>
+              <option value="WEEKLY">Once per week</option>
             </select>
           </div>
 
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">
-              Actual duration (what gets placed)
+              Order term sent to E*TRADE
             </label>
             <select
               value={formData.actualDuration}
@@ -1079,11 +1199,15 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
             </select>
           </div>
 
-        {formData.preferredDuration !== formData.actualDuration && (
-          <div className="p-3 bg-amber-500/20 border border-amber-500/50 rounded-lg text-amber-400 text-sm">
-            This order will be placed daily at the scheduled time since the preferred duration differs from actual duration.
-          </div>
-        )}
+          {formData.scheduleEnabled && (
+            <div className="p-3 bg-amber-500/20 border border-amber-500/50 rounded-lg text-amber-400 text-sm">
+              {formData.scheduleOnce
+                ? 'Runs once at the scheduled time.'
+                : formData.scheduleFrequency === 'WEEKLY'
+                  ? 'Repeats once per week at the scheduled time.'
+                  : 'Repeats every trading day at the scheduled time.'}
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">
@@ -1091,14 +1215,16 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
             </label>
             <select
               value={formData.sessionTime}
-              onChange={(e) => setFormData({ ...formData, sessionTime: e.target.value })}
+              onChange={(e) =>
+                setFormData({ ...formData, sessionTime: e.target.value as FormState['sessionTime'] })
+              }
               className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             >
-              <option value="MARKET">Market hours (9:30 AM)</option>
-              <option value="EXTENDED">Extended hours (7:00 AM)</option>
+              <option value="EXTENDED">Extended hours (7:00 AM ET)</option>
+              <option value="MARKET">Market hours (9:30 AM ET)</option>
             </select>
             <p className="mt-1 text-xs text-slate-500">
-              When scheduling is on: Extended = 7:00 AM, Market = 9:30 AM.
+              This sets the default time when no explicit schedule time is chosen.
             </p>
           </div>
 
@@ -1107,10 +1233,20 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
               <input
                 type="checkbox"
                 checked={formData.scheduleEnabled}
-                onChange={(e) => setFormData({ ...formData, scheduleEnabled: e.target.checked })}
+                onChange={(e) => {
+                  const enabled = e.target.checked;
+                  setFormData((prev) => ({
+                    ...prev,
+                    scheduleEnabled: enabled,
+                    scheduledFor: enabled ? prev.scheduledFor : '',
+                  }));
+                  if (!enabled) {
+                    setScheduledForTouched(false);
+                  }
+                }}
                 className="w-4 h-4"
               />
-              Enable scheduling
+              Schedule this order
             </label>
           </div>
 
@@ -1124,19 +1260,30 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
                     onChange={(e) => setFormData({ ...formData, scheduleOnce: e.target.checked })}
                     className="w-4 h-4"
                   />
-                  Schedule only once (run at chosen time once; do not repeat daily)
+                  Schedule only once (ignores placement frequency)
                 </label>
               </div>
               <div>
                 <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Schedule for
+                  Schedule time
                 </label>
                 <input
                   type="datetime-local"
                   value={formData.scheduledFor}
-                  onChange={(e) => setFormData({ ...formData, scheduledFor: e.target.value })}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    setScheduledForTouched(value !== '');
+                    setFormData({ ...formData, scheduledFor: value });
+                  }}
                   className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
                 />
+                <p className="mt-1 text-xs text-slate-500">
+                  {formData.scheduledFor
+                    ? 'This is the next trading day for the selected session unless you change it.'
+                    : `Leave blank to run the next trading day at ${
+                        formData.sessionTime === 'EXTENDED' ? '7:00 AM ET' : '9:30 AM ET'
+                      }.`}
+                </p>
               </div>
             </>
           )}
@@ -1154,13 +1301,23 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
           />
         </div>
 
-        <button
-          type="submit"
-          disabled={submitting}
-          className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-sm font-medium rounded transition-colors"
-        >
-          {submitting ? 'Creating...' : 'Create Order'}
-        </button>
+        <div className="flex flex-col gap-2">
+          <button
+            type="submit"
+            disabled={submitting || sendingNow}
+            className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-sm font-medium rounded transition-colors"
+          >
+            {submitting ? 'Creating...' : 'Create Order'}
+          </button>
+          <button
+            type="button"
+            onClick={handleSendNow}
+            disabled={sendingNow || submitting}
+            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 text-white text-sm font-medium rounded transition-colors"
+          >
+            {sendingNow ? 'Sending...' : 'Send Now'}
+          </button>
+        </div>
       </form>
     </div>
   );

@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import { OrderService } from '../server/services/order-service.js';
 import { OrderExecutor } from '../server/services/order-executor.js';
 import { ETradeClient } from '../server/services/etrade-client.js';
-import type { SessionTime, Order } from '../shared/types/index.js';
+import type { SessionTime, Order, ScheduleFrequency } from '../shared/types/index.js';
 import { log as schedulerLog, error as schedulerError } from './logger.js';
 
 function getEtradeCredentialsFromEnv(): { credentials: { consumerKey: string; consumerSecret: string; accessToken?: string; accessTokenSecret?: string }; isSandbox: boolean } {
@@ -70,8 +70,10 @@ export abstract class SchedulerBase {
       const elapsed = Date.now() - startTime;
       schedulerLog(`[${this.schedulerId}] Execution complete: ${successful} successful, ${failed} failed (${elapsed}ms)`);
 
-      // For orders that require daily placement and are not one-time, reschedule them
-      await this.rescheduleRecurringOrders(orders.filter((o) => o.requiresDaily && !o.scheduleOnce));
+      // For recurring orders (daily/weekly) that are not one-time, reschedule them
+      await this.rescheduleRecurringOrders(
+        orders.filter((o) => o.scheduleEnabled && !o.scheduleOnce)
+      );
     } catch (error: any) {
       const errMsg = `[${this.schedulerId}] Error processing scheduled orders: ${error?.message ?? error}`;
       schedulerError(errMsg, error);
@@ -88,7 +90,9 @@ export abstract class SchedulerBase {
       schedulerLog(`[${this.schedulerId}] Due-orders check: ${orders.length} order(s) due`);
       const results = await this.executeBatch(orders, 5);
       const successful = results.filter((r) => r).length;
-      await this.rescheduleRecurringOrders(orders.filter((o) => o.requiresDaily && !o.scheduleOnce));
+      await this.rescheduleRecurringOrders(
+        orders.filter((o) => o.scheduleEnabled && !o.scheduleOnce)
+      );
       schedulerLog(`[${this.schedulerId}] Due-orders complete: ${successful}/${orders.length} successful`);
     } catch (error: any) {
       schedulerError(`[${this.schedulerId}] processDueOrders: ${error?.message ?? error}`, error);
@@ -132,15 +136,15 @@ export abstract class SchedulerBase {
   private async rescheduleRecurringOrders(orders: Order[]): Promise<void> {
     for (const order of orders) {
       try {
-        // Calculate next execution time (next trading day)
-        const nextScheduledTime = this.getNextTradingDay(
-          order.sessionTime === 'EXTENDED' ? '07:00' : '09:30'
+        const nextScheduledTime = this.getNextScheduledTime(
+          order.sessionTime === 'EXTENDED' ? '07:00' : '09:30',
+          order.scheduleFrequency ?? 'DAILY',
+          order.scheduledFor
         );
 
-        // Create a new order for tomorrow
+        const { id: _id, createdAt: _c, updatedAt: _u, ...rest } = order;
         await this.orderService.createOrder({
-          ...order,
-          id: undefined as any,
+          ...rest,
           status: 'SCHEDULED',
           scheduledFor: nextScheduledTime,
           etradeOrderId: undefined,
@@ -159,13 +163,18 @@ export abstract class SchedulerBase {
     }
   }
 
-  protected getNextTradingDay(time: string): Date {
+  protected getNextScheduledTime(
+    time: string,
+    frequency: ScheduleFrequency,
+    fromDate?: Date
+  ): Date {
     const [hours, minutes] = time.split(':').map(Number);
-    const next = new Date();
+    const base = fromDate ? new Date(fromDate) : new Date();
+    const next = new Date(base);
     next.setHours(hours, minutes, 0, 0);
 
-    // Move to next day
-    next.setDate(next.getDate() + 1);
+    const incrementDays = frequency === 'WEEKLY' ? 7 : 1;
+    next.setDate(next.getDate() + incrementDays);
 
     // Skip weekends
     const day = next.getDay();

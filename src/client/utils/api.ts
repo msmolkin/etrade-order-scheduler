@@ -20,6 +20,8 @@ export interface Order {
   sessionTime: string;
   scheduledFor?: string;
   scheduleEnabled: boolean;
+  scheduleFrequency?: 'DAILY' | 'WEEKLY';
+  scheduleOnce?: boolean;
   status: string;
   etradeOrderId?: string;
   submittedAt?: string;

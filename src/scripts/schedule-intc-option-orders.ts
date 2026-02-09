@@ -34,6 +34,7 @@ async function scheduleIntcOptionOrders() {
     requiresDaily: false,
     sessionTime: 'MARKET' as const,
     scheduleEnabled: true,
+    scheduleFrequency: 'DAILY' as const,
     scheduleOnce: true,
     status: 'SCHEDULED' as const,
     retryCount: 0,

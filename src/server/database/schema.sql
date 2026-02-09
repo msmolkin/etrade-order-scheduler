@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS orders (
   -- Scheduling
   scheduled_for TIMESTAMP WITH TIME ZONE,
   schedule_enabled BOOLEAN NOT NULL DEFAULT false,
+  schedule_frequency VARCHAR(10) NOT NULL DEFAULT 'DAILY',
 
   -- Status tracking
   status VARCHAR(50) NOT NULL DEFAULT 'PENDING',
@@ -194,5 +195,11 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                  WHERE table_name = 'orders' AND column_name = 'schedule_once') THEN
     ALTER TABLE orders ADD COLUMN schedule_once BOOLEAN NOT NULL DEFAULT false;
+  END IF;
+
+  -- Add schedule_frequency (DAILY/WEEKLY)
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'orders' AND column_name = 'schedule_frequency') THEN
+    ALTER TABLE orders ADD COLUMN schedule_frequency VARCHAR(10) NOT NULL DEFAULT 'DAILY';
   END IF;
 END $$;

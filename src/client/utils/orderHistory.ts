@@ -22,6 +22,8 @@ export type OrderHistoryDraft = Partial<{
   actualDuration: string;
   sessionTime: string;
   scheduleEnabled: boolean;
+  scheduleFrequency: 'DAILY' | 'WEEKLY';
+  scheduleOnce: boolean;
   scheduledFor: string;
   notes: string;
 }>;
@@ -43,6 +45,7 @@ function sanitizeDraft(raw: unknown): OrderHistoryDraft | null {
   const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
   const bool = (v: unknown) => (typeof v === 'boolean' ? v : undefined);
+  const freq = (v: unknown) => (v === 'DAILY' || v === 'WEEKLY' ? v : undefined);
   draft.accountId = str(d.accountId);
   draft.symbol = str(d.symbol);
   draft.securityType = d.securityType === 'EQUITY' || d.securityType === 'OPTION' ? d.securityType : undefined;
@@ -59,6 +62,8 @@ function sanitizeDraft(raw: unknown): OrderHistoryDraft | null {
   draft.actualDuration = str(d.actualDuration);
   draft.sessionTime = str(d.sessionTime);
   draft.scheduleEnabled = bool(d.scheduleEnabled);
+  draft.scheduleFrequency = freq(d.scheduleFrequency);
+  draft.scheduleOnce = bool(d.scheduleOnce);
   draft.scheduledFor = str(d.scheduledFor);
   draft.notes = str(d.notes);
   if (!draft.symbol && !draft.action && !draft.orderType) return null;
