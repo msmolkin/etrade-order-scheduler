@@ -218,11 +218,15 @@ function updateEnvFile(accessToken: string, accessTokenSecret: string, isSandbox
 
 const REQUEST_TOKEN_FILE = path.join(process.cwd(), '.oauth_request_token.json');
 
+function normalizeVerifier(verifier: string): string {
+  const normalized = verifier.trim().toUpperCase();
+  console.log(`Using uppercase. Using code ${normalized} to authenticate.`);
+  return normalized;
+}
+
 async function main() {
   const phase = process.env.ETRADE_OAUTH_PHASE;
-  const verifierFromEnv = process.env.ETRADE_VERIFIER
-    ? process.env.ETRADE_VERIFIER.toUpperCase()
-    : undefined;
+  const verifierFromEnv = process.env.ETRADE_VERIFIER;
   const saveTokens = process.env.ETRADE_SAVE_TOKENS === 'y' || process.env.ETRADE_SAVE_TOKENS === 'yes';
 
   // Phase 2: complete with verifier (from env or interactive prompt if env fails/missing)
@@ -236,7 +240,7 @@ async function main() {
       const { accessToken, accessTokenSecret } = await getAccessToken(
         requestToken,
         requestTokenSecret,
-        verifier.trim()
+        normalizeVerifier(verifier)
       );
       updateEnvFile(accessToken, accessTokenSecret, isSandbox);
       fs.unlinkSync(REQUEST_TOKEN_FILE);
@@ -262,21 +266,31 @@ async function main() {
 
     // No verifier or env attempt failed: in interactive shell, ask for code or cancel
     if (isInteractive) {
-      const input = await prompt('\nEnter verification code (or press Enter to cancel): ');
-      if (!input) {
-        console.log('Cancelled. No changes made.');
-        process.exit(0);
-        return;
+      const MAX_PHASE2_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_PHASE2_ATTEMPTS; attempt++) {
+        const input = await prompt('\nEnter verification code (or press Enter to cancel): ');
+        if (!input) {
+          console.log('Cancelled. No changes made.');
+          process.exit(0);
+          return;
+        }
+        try {
+          await runPhase2(input);
+          process.exit(0);
+          return;
+        } catch (error: any) {
+          console.error(
+            `Error completing OAuth (attempt ${attempt}/${MAX_PHASE2_ATTEMPTS}):`,
+            error.response?.data || error.message
+          );
+          if (attempt < MAX_PHASE2_ATTEMPTS) {
+            console.log('Try again.');
+          }
+        }
       }
-      try {
-        await runPhase2(input);
-        process.exit(0);
-        return;
-      } catch (error: any) {
-        console.error('Error completing OAuth:', error.response?.data || error.message);
-        process.exit(1);
-        return;
-      }
+      console.error('All phase 2 attempts failed.');
+      process.exit(1);
+      return;
     }
 
     // Phase 2, not interactive, no working verifier
@@ -326,7 +340,7 @@ async function main() {
     const { accessToken, accessTokenSecret } = await getAccessToken(
       requestToken,
       requestTokenSecret,
-      verifier.trim()
+      normalizeVerifier(verifier)
     );
     console.log('\n✓ Successfully obtained access tokens!\n');
 
