@@ -245,7 +245,7 @@ router.post('/', async (req, res) => {
     ) {
       const sellOrderData: Omit<
         Order,
-        'id' | 'createdAt' | 'updatedAt' | 'status' | 'requiresDaily' | 'retryCount' | 'maxRetries'
+        'id' | 'createdAt' | 'updatedAt' | 'requiresDaily' | 'retryCount' | 'maxRetries'
       > = {
         ...orderData,
         action: 'SELL',
@@ -259,13 +259,11 @@ router.post('/', async (req, res) => {
           : undefined,
         sellOrderEnabled: false,
         sellOrderTriggeredByOrderId: order.id,
-        // Don't start monitoring until buy order executes
         status: 'PENDING',
       };
 
       sellOrder = await orderService.createOrder({
         ...sellOrderData,
-        status: 'PENDING',
         requiresDaily,
         retryCount: 0,
         maxRetries: Number(raw.maxRetries) || 3,
