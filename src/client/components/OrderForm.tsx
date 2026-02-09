@@ -1167,21 +1167,23 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
           <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
             Duration & schedule
           </h3>
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              Placement frequency
-            </label>
-            <select
-              value={formData.scheduleFrequency}
-              onChange={(e) =>
-                setFormData({ ...formData, scheduleFrequency: e.target.value as 'DAILY' | 'WEEKLY' })
-              }
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-            >
-              <option value="DAILY">Every trading day</option>
-              <option value="WEEKLY">Once per week</option>
-            </select>
-          </div>
+          {formData.scheduleEnabled && !formData.scheduleOnce && (
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1">
+                Placement frequency
+              </label>
+              <select
+                value={formData.scheduleFrequency}
+                onChange={(e) =>
+                  setFormData({ ...formData, scheduleFrequency: e.target.value as 'DAILY' | 'WEEKLY' })
+                }
+                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+              >
+                <option value="DAILY">Every trading day</option>
+                <option value="WEEKLY">Once per week</option>
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">

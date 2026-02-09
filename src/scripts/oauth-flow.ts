@@ -5,6 +5,7 @@ import axios from 'axios';
 import * as readline from 'readline';
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 import 'dotenv/config';
 
 const SANDBOX = process.env.ETRADE_SANDBOX === 'true';
@@ -218,10 +219,18 @@ function updateEnvFile(accessToken: string, accessTokenSecret: string, isSandbox
 
 const REQUEST_TOKEN_FILE = path.join(process.cwd(), '.oauth_request_token.json');
 
-function normalizeVerifier(verifier: string): string {
+function normalizeVerifier(verifier: string, source: string): string {
   const normalized = verifier.trim().toUpperCase();
-  console.log(`Using uppercase. Using code ${normalized} to authenticate.`);
+  console.log(`Using uppercase. Using code ${normalized} to authenticate (source: ${source}).`);
   return normalized;
+}
+
+function readClipboardText(): string {
+  try {
+    return execSync('pbpaste', { encoding: 'utf-8' });
+  } catch {
+    return '';
+  }
 }
 
 async function main() {
@@ -231,16 +240,32 @@ async function main() {
 
   // Phase 2: complete with verifier (from env or interactive prompt if env fails/missing)
   if (phase === '2') {
+    console.log('Checking clipboard first.');
+    const clipboardText = readClipboardText().trim();
     let verifierToUse = verifierFromEnv;
+    let verifierSource = verifierFromEnv ? 'ETRADE_VERIFIER (.env)' : null;
+    if (clipboardText.length === 5) {
+      console.log(
+        `The clipboard contains 5 characters (${clipboardText.slice(0, 2)}***). Trying this code first.`
+      );
+      verifierToUse = clipboardText;
+      verifierSource = 'clipboard';
+    } else if (clipboardText.length === 0) {
+      console.log('Clipboard is empty.');
+    } else if (clipboardText.length > 5) {
+      console.log('Clipboard contains more than 5 characters.');
+    } else {
+      console.log('Clipboard contains less than 5 characters.');
+    }
     const isInteractive = process.stdin.isTTY;
 
-    const runPhase2 = async (verifier: string): Promise<void> => {
+    const runPhase2 = async (verifier: string, source: string): Promise<void> => {
       const raw = fs.readFileSync(REQUEST_TOKEN_FILE, 'utf-8');
       const { token: requestToken, tokenSecret: requestTokenSecret, isSandbox } = JSON.parse(raw);
       const { accessToken, accessTokenSecret } = await getAccessToken(
         requestToken,
         requestTokenSecret,
-        normalizeVerifier(verifier)
+        normalizeVerifier(verifier, source)
       );
       updateEnvFile(accessToken, accessTokenSecret, isSandbox);
       fs.unlinkSync(REQUEST_TOKEN_FILE);
@@ -248,19 +273,20 @@ async function main() {
       console.log('OAuth setup complete.');
     };
 
-    // Try env verifier first if set
-    if (verifierToUse) {
+    // Try verifier from clipboard or env if set
+    if (verifierToUse && verifierSource) {
       try {
-        await runPhase2(verifierToUse);
+        await runPhase2(verifierToUse, verifierSource);
         process.exit(0);
         return;
       } catch (error: any) {
-        console.error('Error completing OAuth with ETRADE_VERIFIER:', error.response?.data || error.message);
+        console.error('Error completing OAuth:', error.response?.data || error.message);
         if (!isInteractive) {
           process.exit(1);
           return;
         }
         verifierToUse = undefined;
+        verifierSource = null;
       }
     }
 
@@ -275,7 +301,7 @@ async function main() {
           return;
         }
         try {
-          await runPhase2(input);
+          await runPhase2(input, 'interactive');
           process.exit(0);
           return;
         } catch (error: any) {
@@ -340,7 +366,7 @@ async function main() {
     const { accessToken, accessTokenSecret } = await getAccessToken(
       requestToken,
       requestTokenSecret,
-      normalizeVerifier(verifier)
+      normalizeVerifier(verifier, verifierFromEnv ? 'ETRADE_VERIFIER (.env)' : 'interactive')
     );
     console.log('\n✓ Successfully obtained access tokens!\n');
 
