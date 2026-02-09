@@ -93,6 +93,9 @@ function App() {
 
   return (
     <div className="min-h-screen bg-slate-900">
+      {historyMenuOpen && (
+        <div className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm" aria-hidden="true" />
+      )}
       <header className="bg-slate-800 border-b border-slate-700">
         <div className="container mx-auto px-4 py-4">
           <h1 className="text-2xl font-bold text-white">E*TRADE Trade Placer</h1>
@@ -135,7 +138,7 @@ function App() {
                 <button
                   type="button"
                   onClick={() => setHistoryMenuOpen((v) => !v)}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-slate-300 text-sm hover:bg-slate-700 hover:text-white transition-colors"
+                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-slate-300 text-sm hover:bg-slate-700 hover:text-white transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
                 >
                   <span>Recent orders</span>
                   <span className="text-slate-500">({orderHistory.length})</span>
@@ -149,8 +152,14 @@ function App() {
                   </svg>
                 </button>
                 {historyMenuOpen && (
-                  <div className="absolute left-2 right-2 mt-1 max-h-64 overflow-auto rounded-lg bg-slate-800 border border-slate-600 shadow-lg z-20">
-                    <div className="sticky top-0 px-3 py-2 text-xs font-medium text-slate-500 border-b border-slate-700 bg-slate-800">
+                  <div
+                    className="absolute left-2 right-2 mt-1 max-h-64 overflow-auto rounded-lg border border-slate-600 shadow-2xl shadow-black/70 z-50"
+                    style={{ backgroundColor: '#020617', opacity: 1 }}
+                  >
+                    <div
+                      className="sticky top-0 px-3 py-2 text-xs font-medium text-slate-300 border-b border-slate-700"
+                      style={{ backgroundColor: '#020617' }}
+                    >
                       Click an order to prefill the form. Use Delete to remove one, or Clear all below.
                     </div>
                     {orderHistory.map((item) => (
@@ -165,7 +174,7 @@ function App() {
                             handleSelectHistoryItem(item);
                           }
                         }}
-                        className="flex items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-slate-700 text-slate-200 text-sm border-b border-slate-700 last:border-b-0 cursor-pointer"
+                        className="flex items-center justify-between gap-2 px-3 py-2.5 text-left hover:bg-slate-800 text-slate-100 text-sm border-b border-slate-700 last:border-b-0 cursor-pointer outline-none focus-visible:bg-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500"
                       >
                         <span className="truncate flex-1 min-w-0">
                           {getHistoryItemLabel(item)}
@@ -173,7 +182,7 @@ function App() {
                         <button
                           type="button"
                           onClick={(e) => handleRemoveHistoryItem(e, item.id)}
-                          className="shrink-0 flex items-center gap-1 px-2 py-1 rounded text-slate-500 hover:text-red-400 hover:bg-slate-600 text-xs font-medium"
+                          className="shrink-0 flex items-center gap-1 px-2 py-1 rounded text-slate-400 hover:text-red-400 hover:bg-slate-800 text-xs font-medium outline-none focus-visible:ring-1 focus-visible:ring-red-400"
                           title="Delete this order from history"
                           aria-label="Delete this order from history"
                         >
@@ -184,11 +193,14 @@ function App() {
                         </button>
                       </div>
                     ))}
-                    <div className="border-t border-slate-700 p-2">
+                    <div
+                      className="border-t border-slate-700 p-2"
+                      style={{ backgroundColor: '#020617' }}
+                    >
                       <button
                         type="button"
                         onClick={handleClearAllHistory}
-                        className="w-full px-3 py-2 rounded text-xs font-medium text-slate-400 hover:text-red-400 hover:bg-slate-700"
+                        className="w-full px-3 py-2 rounded text-xs font-medium text-slate-300 hover:text-red-400 hover:bg-slate-800 outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                       >
                         Clear all history
                       </button>
