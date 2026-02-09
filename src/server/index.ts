@@ -200,14 +200,32 @@ server.listen(port, async () => {
 });
 
 // Graceful shutdown
+let isShuttingDown = false;
 async function shutdown() {
+  if (isShuttingDown) {
+    console.log('\nForce exiting...');
+    process.exit(1);
+  }
+  isShuttingDown = true;
   console.log('\n⏹️  Shutting down server...');
-  
+
+  // Force exit after 5 seconds if graceful shutdown hangs
+  const forceExitTimer = setTimeout(() => {
+    console.error('Shutdown timed out, forcing exit');
+    process.exit(1);
+  }, 5_000);
+  forceExitTimer.unref();
+
   // Stop threshold monitor
   if (thresholdMonitor) {
     await thresholdMonitor.stop();
   }
-  
+
+  // Close all WebSocket connections so server.close() can finish
+  for (const client of wss.clients) {
+    client.close(1001, 'Server shutting down');
+  }
+
   server.close(() => {
     console.log('✓ Server stopped');
     process.exit(0);

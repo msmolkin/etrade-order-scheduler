@@ -298,6 +298,23 @@ export class OrderService {
     );
   }
 
+  /**
+   * Find option orders whose underlying contract has expired.
+   * An option is considered expired once 8 PM Eastern on its expiration_date has passed.
+   * Only returns orders still in actionable statuses (PENDING, SCHEDULED).
+   */
+  async getOptionOrdersPastExpiration(): Promise<Order[]> {
+    const result = await query<Order>(
+      `SELECT * FROM orders
+       WHERE security_type = 'OPTION'
+       AND expiration_date IS NOT NULL
+       AND status IN ('PENDING', 'SCHEDULED')
+       AND (expiration_date::date + INTERVAL '20 hours') AT TIME ZONE 'America/New_York' < NOW()
+       ORDER BY expiration_date ASC`
+    );
+    return result.rows.map((row) => this.mapRowToOrder(row));
+  }
+
   async getActiveThresholdOrders(): Promise<Order[]> {
     const result = await query<Order>(
       `SELECT * FROM orders

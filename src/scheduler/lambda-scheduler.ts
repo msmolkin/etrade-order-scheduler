@@ -15,6 +15,9 @@ export class LambdaScheduler extends SchedulerBase {
     console.log('Lambda invoked with event:', JSON.stringify(event));
 
     try {
+      // Expire option orders whose contract has expired (8 PM ET cutoff)
+      await this.expireOptionOrders();
+
       const sessionTime: SessionTime = event.sessionTime || 'MARKET';
 
       console.log(`Processing ${sessionTime} orders via Lambda...`);

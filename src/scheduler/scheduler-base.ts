@@ -198,6 +198,33 @@ export abstract class SchedulerBase {
     return currentTime >= marketOpen && currentTime < marketClose;
   }
 
+  /**
+   * Expire option orders whose underlying contract has expired.
+   * An option is considered expired once 8 PM Eastern on its expiration_date has passed.
+   */
+  protected async expireOptionOrders(): Promise<void> {
+    try {
+      const orders = await this.orderService.getOptionOrdersPastExpiration();
+      if (orders.length === 0) return;
+
+      schedulerLog(`[${this.schedulerId}] Expiring ${orders.length} option order(s) past contract expiration`);
+
+      for (const order of orders) {
+        try {
+          await this.orderService.updateOrderStatus(order.id, 'EXPIRED', {
+            expiresAt: new Date(),
+            lastError: `Option contract expired (expiration date: ${order.expirationDate instanceof Date ? order.expirationDate.toISOString().split('T')[0] : order.expirationDate})`,
+          });
+          schedulerLog(`[${this.schedulerId}] Expired order ${order.id} (${order.symbol} ${order.optionType} ${order.strikePrice} exp ${order.expirationDate})`);
+        } catch (err: any) {
+          schedulerError(`[${this.schedulerId}] Failed to expire order ${order.id}: ${err?.message ?? err}`, err);
+        }
+      }
+    } catch (error: any) {
+      schedulerError(`[${this.schedulerId}] expireOptionOrders: ${error?.message ?? error}`, error);
+    }
+  }
+
   protected async verifyRecentOrders(): Promise<void> {
     this.refreshCredentials();
     try {

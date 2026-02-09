@@ -29,6 +29,7 @@ export class LocalScheduler extends SchedulerBase {
   private extendedHoursJob?: cron.ScheduledTask;
   private verificationJob?: cron.ScheduledTask;
   private catchUpJob?: cron.ScheduledTask;
+  private optionExpirationJob?: cron.ScheduledTask;
   private dueOrdersInterval?: ReturnType<typeof setInterval>;
   private verificationRunning = false;
 
@@ -110,6 +111,21 @@ export class LocalScheduler extends SchedulerBase {
       setImmediate(() => this.processDueOrders());
     }, 30_000);
 
+    // Option expiration: expire option orders whose contract has expired (daily at 8:05 PM ET)
+    this.optionExpirationJob = cron.schedule('5 20 * * *', () => {
+      setImmediate(async () => {
+        schedulerLog('cron_fire job=optionExpiration trigger="8:05 PM EST"');
+        console.log('\n⏰ Option expiration check (8:05 PM EST)');
+        await this.expireOptionOrders();
+      });
+    }, { timezone: SCHEDULER_TZ });
+
+    // Startup: expire any option orders whose contract has already expired
+    setImmediate(() => {
+      schedulerLog('option_expiration reason=startup');
+      this.expireOptionOrders();
+    });
+
     // Startup catch-up: run overdue EXTENDED/MARKET orders now (e.g. scheduler started at 7:30)
     const { hour, minute, isWeekday } = getLocalTimeInSchedulerTz();
     if (isWeekday) {
@@ -130,6 +146,7 @@ export class LocalScheduler extends SchedulerBase {
     console.log('  - Extended hours orders: 7:00 AM EST (Mon-Fri)');
     console.log('  - Catch-up: on startup and every 10 min (6:00–10:00)');
     console.log('  - Order verification: Every 15 minutes (during market hours)');
+    console.log('  - Option expiration: 8:05 PM EST daily + on startup');
     console.log('  - Due orders: Every 30 seconds (for arbitrary scheduled times)');
     console.log('\nScheduler is running. Press Ctrl+C to stop.\n');
   }
@@ -152,6 +169,10 @@ export class LocalScheduler extends SchedulerBase {
 
     if (this.verificationJob) {
       this.verificationJob.stop();
+    }
+
+    if (this.optionExpirationJob) {
+      this.optionExpirationJob.stop();
     }
 
     if (this.dueOrdersInterval) {
