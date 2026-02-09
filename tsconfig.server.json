@@ -2,8 +2,8 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "module": "ESNext",
-    "outDir": "./dist/server",
-    "rootDir": "./src/server"
+    "outDir": "./dist",
+    "rootDir": "./src"
   },
-  "include": ["src/server/**/*", "src/shared/**/*"]
+  "include": ["src/server/**/*", "src/shared/**/*", "src/scheduler/**/*"]
 }
