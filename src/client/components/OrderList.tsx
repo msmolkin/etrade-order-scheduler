@@ -6,7 +6,7 @@ export default function OrderList() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | 'scheduled' | 'pending' | 'submitted'>('all');
+  const [filter, setFilter] = useState<'all' | 'scheduled' | 'pending' | 'submitted' | 'complete'>('all');
   const { isConnected, lastMessage } = useWebSocket('ws://localhost:3001/ws');
 
   const loadOrders = async () => {
@@ -64,8 +64,12 @@ export default function OrderList() {
     }
   };
 
+  const ACTIVE_STATUSES = ['PENDING', 'SCHEDULED', 'SUBMITTED'];
+  const COMPLETE_STATUSES = ['FILLED', 'REJECTED', 'CANCELLED', 'EXPIRED'];
+
   const filteredOrders = orders.filter((order) => {
-    if (filter === 'all') return true;
+    if (filter === 'all') return ACTIVE_STATUSES.includes(order.status);
+    if (filter === 'complete') return COMPLETE_STATUSES.includes(order.status);
     if (filter === 'scheduled') return order.status === 'SCHEDULED';
     if (filter === 'pending') return order.status === 'PENDING';
     if (filter === 'submitted') return order.status === 'SUBMITTED';
@@ -118,11 +122,11 @@ export default function OrderList() {
         </div>
       </div>
 
-      <div className="flex gap-2 mb-4">
-        {['all', 'scheduled', 'pending', 'submitted'].map((f) => (
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {(['all', 'scheduled', 'pending', 'submitted', 'complete'] as const).map((f) => (
           <button
             key={f}
-            onClick={() => setFilter(f as any)}
+            onClick={() => setFilter(f)}
             className={`px-4 py-2 rounded-lg capitalize transition-colors ${
               filter === f
                 ? 'bg-blue-600 text-white'
