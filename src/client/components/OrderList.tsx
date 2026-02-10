@@ -6,7 +6,7 @@ export default function OrderList() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<'all' | 'scheduled' | 'pending' | 'submitted' | 'complete'>('all');
+  const [filter, setFilter] = useState<'all' | 'scheduled' | 'pending' | 'submitted' | 'failed' | 'complete'>('all');
   const { isConnected, lastMessage } = useWebSocket('ws://localhost:3001/ws');
 
   const loadOrders = async () => {
@@ -68,9 +68,10 @@ export default function OrderList() {
   const COMPLETE_STATUSES = ['FILLED', 'REJECTED', 'CANCELLED', 'EXPIRED'];
 
   const filteredOrders = orders.filter((order) => {
-    if (filter === 'all') return ACTIVE_STATUSES.includes(order.status);
+    if (filter === 'all') return ACTIVE_STATUSES.includes(order.status) && !order.lastError;
+    if (filter === 'failed') return !!order.lastError && ACTIVE_STATUSES.includes(order.status);
     if (filter === 'complete') return COMPLETE_STATUSES.includes(order.status);
-    if (filter === 'scheduled') return order.status === 'SCHEDULED';
+    if (filter === 'scheduled') return order.status === 'SCHEDULED' && !order.lastError;
     if (filter === 'pending') return order.status === 'PENDING';
     if (filter === 'submitted') return order.status === 'SUBMITTED';
     return true;
@@ -130,19 +131,24 @@ export default function OrderList() {
       </div>
 
       <div className="flex gap-2 mb-4 flex-wrap">
-        {(['all', 'scheduled', 'pending', 'submitted', 'complete'] as const).map((f) => (
-          <button
-            key={f}
-            onClick={() => setFilter(f)}
-            className={`px-4 py-2 rounded-lg capitalize transition-colors ${
-              filter === f
-                ? 'bg-blue-600 text-white'
-                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-            }`}
-          >
-            {f}
-          </button>
-        ))}
+        {(['all', 'scheduled', 'pending', 'submitted', 'failed', 'complete'] as const).map((f) => {
+          const failedCount = orders.filter((o) => !!o.lastError && ACTIVE_STATUSES.includes(o.status)).length;
+          return (
+            <button
+              key={f}
+              onClick={() => setFilter(f)}
+              className={`px-4 py-2 rounded-lg capitalize transition-colors ${
+                filter === f
+                  ? f === 'failed' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'
+                  : f === 'failed' && failedCount > 0
+                    ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+              }`}
+            >
+              {f}{f === 'failed' && failedCount > 0 ? ` (${failedCount})` : ''}
+            </button>
+          );
+        })}
       </div>
 
       {filteredOrders.length === 0 ? (
