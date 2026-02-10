@@ -99,6 +99,34 @@ app.get('/health', async (req, res) => {
 
 // Routes
 app.use('/api/orders', ordersRouter);
+
+// Verify E*TRADE session (able to execute) — registered before auth router so it's always available
+app.get('/api/auth/test', async (req, res) => {
+  const isSandbox = process.env.ETRADE_SANDBOX === 'true';
+  const etradeHost = isSandbox ? 'https://apisb.etrade.com' : 'https://api.etrade.com';
+  try {
+    const client = getETradeClient();
+    const accounts = await client.getAccounts();
+    const count = Array.isArray(accounts) ? accounts.length : 0;
+    res.json({
+      ok: true,
+      authenticatedWithEtrade: true,
+      etradeHost,
+      accountsCount: count,
+      message: 'Verified against E*TRADE account API; logged in and able to execute.',
+    });
+  } catch (error: any) {
+    const msg = error?.message || String(error);
+    res.status(401).json({
+      ok: false,
+      authenticatedWithEtrade: false,
+      etradeHost,
+      error: msg,
+      message: 'E*TRADE authentication check failed (session expired or invalid). Re-authenticate to continue.',
+    });
+  }
+});
+
 app.use('/api/auth', authRouter);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/positions', positionsRouter);
@@ -177,6 +205,7 @@ server.listen(port, async () => {
   console.log('\nEndpoints:');
   console.log('  GET    /health');
   console.log('  GET    /api/auth/status');
+  console.log('  GET    /api/auth/test   (verify able to execute)');
   console.log('  GET    /api/auth/start');
   console.log('  GET    /api/auth/callback');
   console.log('  POST   /api/auth/verify');

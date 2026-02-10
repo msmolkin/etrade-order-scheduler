@@ -6,7 +6,6 @@ import dotenv from 'dotenv';
 import * as fs from 'fs';
 import * as path from 'path';
 import puppeteer from 'puppeteer';
-
 const router = Router();
 
 const SANDBOX = process.env.ETRADE_SANDBOX === 'true';
@@ -209,7 +208,8 @@ router.get('/callback', async (req, res) => {
 // Manual verifier entry endpoint (for when callback doesn't work)
 router.post('/verify', async (req, res) => {
   try {
-    const { oauth_token, oauth_verifier } = req.body;
+    const { oauth_token, oauth_verifier: rawVerifier } = req.body;
+    const oauth_verifier = typeof rawVerifier === 'string' ? rawVerifier.trim().toUpperCase() : rawVerifier;
 
     if (!oauth_token || !oauth_verifier) {
       return res.status(400).json({

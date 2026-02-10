@@ -4,6 +4,7 @@ import OrderForm from './components/OrderForm';
 import OptionsChain from './components/OptionsChain';
 import ExpiredOrders from './components/ExpiredOrders';
 import PositionsCushion from './components/PositionsCushion';
+import AuthWidget from './components/AuthWidget';
 import {
   loadOrderHistory,
   addToOrderHistory,
@@ -97,9 +98,14 @@ function App() {
         <div className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm" aria-hidden="true" />
       )}
       <header className="bg-slate-800 border-b border-slate-700">
-        <div className="container mx-auto px-4 py-4">
-          <h1 className="text-2xl font-bold text-white">E*TRADE Trade Placer</h1>
-          <p className="text-slate-400 text-sm mt-1">Automated daily trading system</p>
+        <div className="container mx-auto px-4 py-4 flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold text-white">E*TRADE Trade Placer</h1>
+            <p className="text-slate-400 text-sm mt-1">Automated daily trading system</p>
+          </div>
+          <div className="flex items-center shrink-0 pt-1">
+            <AuthWidget />
+          </div>
         </div>
       </header>
 
