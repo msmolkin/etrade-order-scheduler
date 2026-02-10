@@ -1,0 +1,41 @@
+---
+description: Opaque popups, modals, and overlays — no transparent panels
+globs: src/client/**/*.tsx
+alwaysApply: false
+---
+
+# UI popups and overlays
+
+When adding or editing **popups, modals, dropdowns, tooltips, or any overlay panel** in the client UI:
+
+1. **Panels must not be transparent.** Use an explicit opaque background so content behind never shows through.
+2. **Use the project standard** for the panel surface (same as "Recent orders" dropdown and auth tooltips):
+   - Inline style: `style={{ backgroundColor: '#020617', opacity: 1 }}`
+   - Do not rely only on Tailwind classes like `bg-slate-800` for overlay content; they can render semi-transparent in some contexts.
+3. **Shadow:** Prefer `shadow-2xl shadow-black/70` for floating panels so they read clearly over the page.
+4. **Positioning:** Place modal/dialog content so it does not overlap the header (e.g. use `pt-24` or `items-end pb-8` on the overlay container so the panel sits lower and avoids the auth/widget area).
+
+## Example — modal content box
+
+```tsx
+// ❌ BAD — panel can look transparent
+<div className="bg-slate-800 border border-slate-600 rounded-lg shadow-xl p-5">
+
+// ✅ GOOD — explicitly opaque
+<div
+  className="border border-slate-600 rounded-lg shadow-2xl shadow-black/70 p-5"
+  style={{ backgroundColor: '#020617', opacity: 1 }}
+>
+```
+
+## Example — dropdown / tooltip
+
+```tsx
+// ✅ GOOD — same opaque style for any overlay panel
+<div
+  className="absolute ... rounded-lg border border-slate-600 shadow-2xl shadow-black/70"
+  style={{ backgroundColor: '#020617', opacity: 1 }}
+>
+```
+
+Backdrop/scrim behind the panel (e.g. `bg-black/70`) may stay semi-transparent for dimming; the **content** panel on top must be opaque.

@@ -1,0 +1,20 @@
+---
+description: Use browser automation + runtime evidence for app debugging
+alwaysApply: true
+---
+
+# Debugging workflow for this app
+
+When debugging UI behavior, layout regressions, or interaction bugs:
+
+1. Reproduce in browser automation first (local app URL), not code-only guessing.
+2. Capture runtime evidence before changing code:
+   - element bounds (`getBoundingClientRect`)
+   - computed styles (`position`, `top/bottom/left/right`, `display`, sizing)
+   - viewport/document metrics and scroll offsets
+3. Form 3-5 concrete hypotheses, then instrument minimal logs to prove/disprove each.
+4. Fix only after evidence identifies root cause.
+5. Keep instrumentation through at least one post-fix verification run.
+6. Remove instrumentation only after verification succeeds and user confirms.
+
+For modal/overlay issues, validate the overlay itself is truly viewport-anchored and not constrained by parent layout.
