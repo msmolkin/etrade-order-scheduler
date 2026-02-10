@@ -1,0 +1,7 @@
+{
+  "setup-worktree": [
+    "npm install",
+    "cp \"$ROOT_WORKTREE_PATH/.env\" .env",
+    "npm run db:migrate"
+  ]
+}
