@@ -364,7 +364,7 @@ router.post('/:id/submit', async (req, res) => {
 // Update order
 router.patch('/:id', async (req, res) => {
   try {
-    const { status, expirationDate: rawExpiration, ...details } = req.body;
+    const { status, expirationDate: rawExpiration, quantity, ...details } = req.body;
 
     if (status) {
       await orderService.updateOrderStatus(req.params.id, status, details);
@@ -377,7 +377,16 @@ router.patch('/:id', async (req, res) => {
       }
     }
 
+    if (quantity !== undefined) {
+      const parsedQty = typeof quantity === 'number' ? quantity : parseInt(String(quantity), 10);
+      if (Number.isNaN(parsedQty) || parsedQty < 1) {
+        return res.status(400).json({ error: 'Quantity must be a positive integer' });
+      }
+      await orderService.updateOrderQuantity(req.params.id, parsedQty);
+    }
+
     const order = await orderService.getOrder(req.params.id);
+    broadcastOrderUpdate(order!);
     res.json(order);
   } catch (error: any) {
     res.status(400).json({ error: error.message });

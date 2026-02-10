@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { fetchOrders, deleteOrder, submitOrder, type Order } from '../utils/api';
+import { fetchOrders, deleteOrder, submitOrder, updateOrderQuantity, type Order } from '../utils/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 export default function OrderList() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
+  const [modifyingId, setModifyingId] = useState<string | null>(null);
+  const [modifyQuantity, setModifyQuantity] = useState<number>(1);
+  const [modifyingSaving, setModifyingSaving] = useState(false);
   const [filter, setFilter] = useState<'all' | 'scheduled' | 'pending' | 'submitted' | 'failed' | 'complete'>('all');
   const { isConnected, lastMessage } = useWebSocket('ws://localhost:3001/ws');
 
@@ -61,6 +64,30 @@ export default function OrderList() {
       alert(`Failed to submit order: ${error.message}`);
     } finally {
       setSubmittingId(null);
+    }
+  };
+
+  const handleStartModify = (order: Order) => {
+    setModifyingId(order.id);
+    setModifyQuantity(order.quantity);
+  };
+
+  const handleCancelModify = () => {
+    setModifyingId(null);
+  };
+
+  const handleConfirmModify = async () => {
+    if (!modifyingId) return;
+    try {
+      setModifyingSaving(true);
+      await updateOrderQuantity(modifyingId, modifyQuantity);
+      setModifyingId(null);
+      loadOrders();
+    } catch (error: any) {
+      console.error('Failed to update quantity:', error);
+      alert(`Failed to update quantity: ${error.message}`);
+    } finally {
+      setModifyingSaving(false);
     }
   };
 
@@ -200,7 +227,44 @@ export default function OrderList() {
                       <span className="text-slate-500">Type:</span> {order.orderType}
                     </div>
                     <div>
-                      <span className="text-slate-500">Quantity:</span> {order.quantity}
+                      <span className="text-slate-500">Quantity:</span>{' '}
+                      {modifyingId === order.id ? (
+                        <span className="inline-flex items-center gap-1">
+                          <input
+                            type="number"
+                            inputMode="numeric"
+                            pattern="[0-9]*"
+                            min="1"
+                            step="1"
+                            value={modifyQuantity}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              if (!Number.isNaN(val) && val >= 1) setModifyQuantity(val);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') handleConfirmModify();
+                              if (e.key === 'Escape') handleCancelModify();
+                            }}
+                            autoFocus
+                            className="w-20 px-2 py-0.5 bg-slate-700 border border-blue-500 rounded text-white text-sm focus:outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-auto [&::-webkit-inner-spin-button]:appearance-auto"
+                          />
+                          <button
+                            onClick={handleConfirmModify}
+                            disabled={modifyingSaving}
+                            className="px-2 py-0.5 text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded transition-colors"
+                          >
+                            {modifyingSaving ? '...' : 'OK'}
+                          </button>
+                          <button
+                            onClick={handleCancelModify}
+                            className="px-2 py-0.5 text-xs bg-slate-600 hover:bg-slate-500 text-slate-300 rounded transition-colors"
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ) : (
+                        order.quantity
+                      )}
                     </div>
                     {order.limitPrice && (
                       <div>
@@ -228,13 +292,22 @@ export default function OrderList() {
                 </div>
                 <div className="ml-4 flex flex-col gap-2">
                   {(order.status === 'PENDING' || order.status === 'SCHEDULED') && (
-                    <button
-                      onClick={() => handleSubmit(order.id)}
-                      disabled={submittingId === order.id}
-                      className="px-3 py-1 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded transition-colors"
-                    >
-                      {submittingId === order.id ? 'Submitting...' : 'Submit Now'}
-                    </button>
+                    <>
+                      <button
+                        onClick={() => handleSubmit(order.id)}
+                        disabled={submittingId === order.id}
+                        className="px-3 py-1 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded transition-colors"
+                      >
+                        {submittingId === order.id ? 'Submitting...' : 'Submit Now'}
+                      </button>
+                      <button
+                        onClick={() => handleStartModify(order)}
+                        disabled={modifyingId === order.id}
+                        className="px-3 py-1 text-sm bg-amber-600 hover:bg-amber-700 disabled:bg-amber-600/50 text-white rounded transition-colors"
+                      >
+                        Modify
+                      </button>
+                    </>
                   )}
                   <button
                     onClick={() => handleDelete(order.id)}

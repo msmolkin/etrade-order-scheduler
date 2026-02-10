@@ -215,6 +215,16 @@ export class OrderService {
     );
   }
 
+  async updateOrderQuantity(id: string, quantity: number): Promise<void> {
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      throw new Error('Quantity must be a positive integer');
+    }
+    await query(
+      'UPDATE orders SET quantity = $2, updated_at = NOW() WHERE id = $1',
+      [id, quantity]
+    );
+  }
+
   async incrementRetryCount(id: string): Promise<number> {
     const result = await query<{ retry_count: number }>(
       'UPDATE orders SET retry_count = retry_count + 1 WHERE id = $1 RETURNING retry_count',

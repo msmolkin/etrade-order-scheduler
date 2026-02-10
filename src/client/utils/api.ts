@@ -192,6 +192,19 @@ export async function resendOrder(orderId: string): Promise<Order> {
   return response.json();
 }
 
+export async function updateOrderQuantity(orderId: string, quantity: number): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quantity }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error || 'Failed to update order quantity');
+  }
+  return response.json();
+}
+
 export async function deleteOrder(orderId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/orders/${orderId}`, {
     method: 'DELETE',

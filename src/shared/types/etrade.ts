@@ -26,7 +26,7 @@ export interface ETradeOrderRequest {
   priceType: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT';
   quantity: number;
   orderTerm: 'GOOD_UNTIL_CANCEL' | 'GOOD_FOR_DAY' | 'IMMEDIATE_OR_CANCEL' | 'FILL_OR_KILL';
-  marketSession: 'REGULAR' | 'EXTENDED';
+  marketSession: 'REGULAR' | 'EXTENDED'; // There should be an option for overnight orders as well (e.g. SLV, TLT, SPY)
   stopPrice?: number;
   limitPrice?: number;
   allOrNone?: boolean;
