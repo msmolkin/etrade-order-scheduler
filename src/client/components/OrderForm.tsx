@@ -122,6 +122,36 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
   const [optionExpirationsLoading, setOptionExpirationsLoading] = useState(false);
   const [optionExpirationsError, setOptionExpirationsError] = useState('');
   const [scheduledForTouched, setScheduledForTouched] = useState(false);
+  const [durationNotice, setDurationNotice] = useState('');
+
+  // GTC is not valid for Extended Hours or SELL SHORT
+  const gtcRestricted = formData.sessionTime === 'EXTENDED' || formData.action === 'SELL_SHORT';
+
+  // Auto-dismiss duration notice after 4 seconds
+  useEffect(() => {
+    if (!durationNotice) return;
+    const timer = setTimeout(() => setDurationNotice(''), 4000);
+    return () => clearTimeout(timer);
+  }, [durationNotice]);
+
+  // Enforce GTC restriction: auto-switch to DAY + DAILY when GTC becomes invalid
+  useEffect(() => {
+    if (!gtcRestricted) return;
+    if (formData.actualDuration !== 'GTC') return;
+
+    const reasons: string[] = [];
+    if (formData.sessionTime === 'EXTENDED') reasons.push('Extended Hours');
+    if (formData.action === 'SELL_SHORT') reasons.push('Sell Short');
+
+    setFormData((prev) => ({
+      ...prev,
+      actualDuration: 'DAY',
+      scheduleFrequency: 'DAILY',
+    }));
+    setDurationNotice(
+      `Switched to DAY order + daily frequency (GTC not available with ${reasons.join(' and ')})`
+    );
+  }, [gtcRestricted, formData.actualDuration, formData.sessionTime, formData.action]);
 
   useEffect(() => {
     const loadAccounts = async () => {
@@ -586,6 +616,15 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
       {autoPricingError && (
         <div className="mb-3 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-100 text-xs">
           {autoPricingError}
+        </div>
+      )}
+
+      {durationNotice && (
+        <div className="mb-3 p-3 bg-blue-500/20 border border-blue-500/50 rounded-lg text-blue-300 text-xs flex items-center gap-2">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          {durationNotice}
         </div>
       )}
 
@@ -1195,7 +1234,9 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
               className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
             >
               <option value="DAY">DAY</option>
-              <option value="GTC">GTC</option>
+              <option value="GTC" disabled={gtcRestricted}>
+                GTC{gtcRestricted ? ' (unavailable)' : ''}
+              </option>
               <option value="IMMEDIATE_OR_CANCEL">Immediate or Cancel</option>
               <option value="FILL_OR_KILL">Fill or Kill</option>
             </select>
