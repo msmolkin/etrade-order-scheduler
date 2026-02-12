@@ -628,10 +628,10 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="bg-slate-800 rounded-lg p-4 space-y-4">
+      <form onSubmit={handleSubmit} className="bg-slate-800/80 rounded-xl p-5 space-y-5 border border-slate-700/50">
         <section className="space-y-3">
-          <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
-            Account & symbol
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-700/50 pb-2">
+            Account & Symbol
           </h3>
           <div>
             <label className="block text-xs font-medium text-slate-400 mb-1">
@@ -783,7 +783,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
         </section>
 
         <section className="space-y-3">
-          <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-700/50 pb-2">
             Security & order
           </h3>
           <div>
@@ -1129,7 +1129,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
         </section>
 
         <section className="space-y-3">
-          <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-700/50 pb-2">
             Quantity & price
           </h3>
           <div>
@@ -1203,7 +1203,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
         </section>
 
         <section className="space-y-3">
-          <h3 className="text-sm font-medium text-slate-400 border-b border-slate-700 pb-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-700/50 pb-2">
             Duration & schedule
           </h3>
           {formData.scheduleEnabled && !formData.scheduleOnce && (
@@ -1344,11 +1344,11 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
           />
         </div>
 
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2 pt-2">
           <button
             type="submit"
             disabled={submitting || sendingNow}
-            className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 text-white text-sm font-medium rounded transition-colors"
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:text-slate-400 text-white text-sm font-semibold rounded-lg transition-all shadow-sm shadow-blue-600/20 hover:shadow-blue-600/30"
           >
             {submitting ? 'Creating...' : 'Create Order'}
           </button>
@@ -1356,7 +1356,7 @@ export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
             type="button"
             onClick={handleSendNow}
             disabled={sendingNow || submitting}
-            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 text-white text-sm font-medium rounded transition-colors"
+            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:text-slate-400 text-white text-sm font-semibold rounded-lg transition-all shadow-sm shadow-emerald-600/20 hover:shadow-emerald-600/30"
           >
             {sendingNow ? 'Sending...' : 'Send Now'}
           </button>
