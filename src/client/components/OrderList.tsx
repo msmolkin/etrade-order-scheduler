@@ -2,6 +2,15 @@ import React, { useEffect, useState } from 'react';
 import { fetchOrders, deleteOrder, submitOrder, updateOrderQuantity, type Order } from '../utils/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 
+type Toast = { id: number; message: string; type: 'success' | 'error' };
+type ConfirmAction = {
+  orderId: string;
+  type: 'delete' | 'submit';
+  label: string;
+};
+
+let toastId = 0;
+
 export default function OrderList() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -11,6 +20,14 @@ export default function OrderList() {
   const [modifyingSaving, setModifyingSaving] = useState(false);
   const [filter, setFilter] = useState<'all' | 'scheduled' | 'pending' | 'submitted' | 'failed' | 'complete'>('all');
   const { isConnected, lastMessage } = useWebSocket('ws://localhost:3001/ws');
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error') => {
+    const id = ++toastId;
+    setToasts((prev) => [...prev, { id, message, type }]);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+  };
 
   const loadOrders = async () => {
     try {
@@ -28,7 +45,6 @@ export default function OrderList() {
     loadOrders();
   }, []);
 
-  // Handle WebSocket updates
   useEffect(() => {
     if (lastMessage?.type === 'order_update') {
       loadOrders();
@@ -36,35 +52,39 @@ export default function OrderList() {
   }, [lastMessage]);
 
   const handleDelete = async (orderId: string) => {
-    if (!confirm('Are you sure you want to delete this order?')) return;
-
     try {
       await deleteOrder(orderId);
       setOrders(orders.filter((o) => o.id !== orderId));
+      showToast('Order deleted', 'success');
     } catch (error) {
       console.error('Failed to delete order:', error);
-      alert('Failed to delete order');
+      showToast('Failed to delete order', 'error');
     }
   };
 
   const handleSubmit = async (orderId: string) => {
-    if (!confirm('Submit this order to E*TRADE now?')) return;
-
     try {
       setSubmittingId(orderId);
       const result = await submitOrder(orderId);
       if (result.success) {
-        alert(`Order submitted successfully!\nE*TRADE Order ID: ${result.order.etradeOrderId || 'Pending'}`);
+        showToast(`Order submitted! E*TRADE ID: ${result.order.etradeOrderId || 'Pending'}`, 'success');
       } else {
-        alert(`Order submission failed: ${result.order.lastError || 'Unknown error'}`);
+        showToast(`Submission failed: ${result.order.lastError || 'Unknown error'}`, 'error');
       }
       loadOrders();
     } catch (error: any) {
       console.error('Failed to submit order:', error);
-      alert(`Failed to submit order: ${error.message}`);
+      showToast(`Failed to submit: ${error.message}`, 'error');
     } finally {
       setSubmittingId(null);
     }
+  };
+
+  const handleConfirmAction = () => {
+    if (!confirmAction) return;
+    if (confirmAction.type === 'delete') handleDelete(confirmAction.orderId);
+    else handleSubmit(confirmAction.orderId);
+    setConfirmAction(null);
   };
 
   const handleStartModify = (order: Order) => {
@@ -83,9 +103,10 @@ export default function OrderList() {
       await updateOrderQuantity(modifyingId, modifyQuantity);
       setModifyingId(null);
       loadOrders();
+      showToast('Quantity updated', 'success');
     } catch (error: any) {
       console.error('Failed to update quantity:', error);
-      alert(`Failed to update quantity: ${error.message}`);
+      showToast(`Failed to update quantity: ${error.message}`, 'error');
     } finally {
       setModifyingSaving(false);
     }
@@ -106,13 +127,13 @@ export default function OrderList() {
 
   const getStatusColor = (status: string) => {
     const colors: Record<string, string> = {
-      SCHEDULED: 'bg-blue-500/20 text-blue-400',
-      PENDING: 'bg-yellow-500/20 text-yellow-400',
-      SUBMITTED: 'bg-purple-500/20 text-purple-400',
-      FILLED: 'bg-green-500/20 text-green-400',
-      REJECTED: 'bg-red-500/20 text-red-400',
-      CANCELLED: 'bg-gray-500/20 text-gray-400',
-      EXPIRED: 'bg-orange-500/20 text-orange-400',
+      SCHEDULED: 'bg-blue-500/20 text-blue-400 border border-blue-500/30',
+      PENDING: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
+      SUBMITTED: 'bg-purple-500/20 text-purple-400 border border-purple-500/30',
+      FILLED: 'bg-green-500/20 text-green-400 border border-green-500/30',
+      REJECTED: 'bg-red-500/20 text-red-400 border border-red-500/30',
+      CANCELLED: 'bg-gray-500/20 text-gray-400 border border-gray-500/30',
+      EXPIRED: 'bg-orange-500/20 text-orange-400 border border-orange-500/30',
     };
     return colors[status] || 'bg-gray-500/20 text-gray-400';
   };
@@ -124,52 +145,112 @@ export default function OrderList() {
     return 'DAILY';
   };
 
-  /** Normalize expiration to YYYY-MM-DD for display (handles ISO strings from API). */
   const formatExpiration = (exp: string | undefined | null): string => {
-    if (exp == null || exp === '') return '—';
+    if (exp == null || exp === '') return '\u2014';
     const s = String(exp);
     if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
     const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? '—' : d.toISOString().slice(0, 10);
+    return Number.isNaN(d.getTime()) ? '\u2014' : d.toISOString().slice(0, 10);
   };
 
   if (loading) {
-    return <div className="text-center py-8 text-slate-400">Loading orders...</div>;
+    return (
+      <div className="flex items-center justify-center py-16">
+        <div className="flex items-center gap-3 text-slate-400">
+          <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+          Loading orders...
+        </div>
+      </div>
+    );
   }
 
   return (
     <div>
+      {/* Toast notifications */}
+      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-slide-in ${
+              toast.type === 'success'
+                ? 'bg-green-600 text-white'
+                : 'bg-red-600 text-white'
+            }`}
+            style={{ animation: 'slideIn 0.3s ease-out' }}
+          >
+            {toast.message}
+          </div>
+        ))}
+      </div>
+
+      {/* Inline confirmation dialog */}
+      {confirmAction && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+          <div className="bg-slate-800 border border-slate-600 rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+            <h3 className="text-white font-semibold text-lg mb-2">
+              {confirmAction.type === 'delete' ? 'Delete order?' : 'Submit order?'}
+            </h3>
+            <p className="text-slate-400 text-sm mb-5">
+              {confirmAction.type === 'delete'
+                ? 'This will permanently remove the order.'
+                : 'This will submit the order to E*TRADE now.'}
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={handleConfirmAction}
+                className={`flex-1 py-2.5 rounded-lg font-medium text-sm transition-colors ${
+                  confirmAction.type === 'delete'
+                    ? 'bg-red-600 hover:bg-red-700 text-white'
+                    : 'bg-green-600 hover:bg-green-700 text-white'
+                }`}
+              >
+                {confirmAction.label}
+              </button>
+              <button
+                onClick={() => setConfirmAction(null)}
+                className="flex-1 py-2.5 rounded-lg font-medium text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold text-white">Active Orders</h2>
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`}></div>
-            <span className="text-sm text-slate-400">
-              {isConnected ? 'Connected' : 'Disconnected'}
+            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 shadow-sm shadow-green-500/50' : 'bg-red-500'}`} />
+            <span className="text-sm text-slate-500">
+              {isConnected ? 'Live' : 'Offline'}
             </span>
           </div>
           <button
             onClick={loadOrders}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors text-sm font-medium"
           >
             Refresh
           </button>
         </div>
       </div>
 
-      <div className="flex gap-2 mb-4 flex-wrap">
+      <div className="flex gap-1.5 mb-5 flex-wrap">
         {(['all', 'scheduled', 'pending', 'submitted', 'failed', 'complete'] as const).map((f) => {
           const failedCount = orders.filter((o) => !!o.lastError && ACTIVE_STATUSES.includes(o.status)).length;
           return (
             <button
               key={f}
               onClick={() => setFilter(f)}
-              className={`px-4 py-2 rounded-lg capitalize transition-colors ${
+              className={`px-3.5 py-1.5 rounded-lg capitalize text-sm font-medium transition-all ${
                 filter === f
-                  ? f === 'failed' ? 'bg-red-600 text-white' : 'bg-blue-600 text-white'
+                  ? f === 'failed' ? 'bg-red-600 text-white shadow-sm shadow-red-600/30' : 'bg-blue-600/20 text-blue-400'
                   : f === 'failed' && failedCount > 0
-                    ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
-                    : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                    ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
+                    : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
               }`}
             >
               {f}{f === 'failed' && failedCount > 0 ? ` (${failedCount})` : ''}
@@ -179,55 +260,58 @@ export default function OrderList() {
       </div>
 
       {filteredOrders.length === 0 ? (
-        <div className="text-center py-12 bg-slate-800 rounded-lg">
-          <p className="text-slate-400">No orders found</p>
+        <div className="text-center py-16 bg-slate-800/50 rounded-xl border border-slate-700/50">
+          <svg className="w-12 h-12 mx-auto text-slate-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+          </svg>
+          <p className="text-slate-500 text-sm">No orders found</p>
         </div>
       ) : (
         <div className="space-y-3">
           {filteredOrders.map((order) => (
             <div
               key={order.id}
-              className="bg-slate-800 rounded-lg p-4 border border-slate-700 hover:border-slate-600 transition-colors"
+              className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600/80 transition-all"
             >
               <div className="flex items-start justify-between">
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mb-2">
-                    <h3 className="text-lg font-semibold text-white">{order.symbol}</h3>
+                    <h3 className="text-lg font-bold text-white tracking-tight">{order.symbol}</h3>
                     {order.securityType === 'OPTION' && (
-                      <span className="px-2 py-0.5 text-xs rounded bg-indigo-500/20 text-indigo-300">
+                      <span className="px-2 py-0.5 text-xs rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
                         Option
                       </span>
                     )}
-                    <span aria-hidden="true" className="text-slate-500 select-none">·</span>
-                    <span className={`px-2 py-1 text-xs rounded-full ${getStatusColor(order.status)}`}>
+                    <span className={`px-2 py-0.5 text-xs rounded-md font-medium ${getStatusColor(order.status)}`}>
                       {order.status}
                     </span>
                     {getScheduleBadge(order) && (
-                      <>
-                        <span aria-hidden="true" className="text-slate-500 select-none">·</span>
-                        <span className="px-2 py-1 text-xs rounded-full bg-amber-500/20 text-amber-400">
-                          {getScheduleBadge(order)}
-                        </span>
-                      </>
+                      <span className="px-2 py-0.5 text-xs rounded-md bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                        {getScheduleBadge(order)}
+                      </span>
                     )}
                   </div>
                   {order.securityType === 'OPTION' && (
                     <div className="text-sm text-slate-300 mb-2">
                       <span className="text-slate-500">Option:</span>{' '}
-                      {order.optionType ?? '—'}{' '}
-                      {order.strikePrice != null ? `$${order.strikePrice}` : '—'} exp{' '}
+                      {order.optionType ?? '\u2014'}{' '}
+                      {order.strikePrice != null ? `$${order.strikePrice}` : '\u2014'} exp{' '}
                       {formatExpiration(order.expirationDate)}
                     </div>
                   )}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-sm text-slate-400">
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1.5 text-sm">
                     <div>
-                      <span className="text-slate-500">Action:</span> {order.action}
+                      <span className="text-slate-500">Action:</span>{' '}
+                      <span className={order.action === 'BUY' || order.action === 'BUY_TO_COVER' ? 'text-green-400' : 'text-red-400'}>
+                        {order.action}
+                      </span>
                     </div>
                     <div>
-                      <span className="text-slate-500">Type:</span> {order.orderType}
+                      <span className="text-slate-500">Type:</span>{' '}
+                      <span className="text-slate-300">{order.orderType}</span>
                     </div>
                     <div>
-                      <span className="text-slate-500">Quantity:</span>{' '}
+                      <span className="text-slate-500">Qty:</span>{' '}
                       {modifyingId === order.id ? (
                         <span className="inline-flex items-center gap-1">
                           <input
@@ -246,7 +330,7 @@ export default function OrderList() {
                               if (e.key === 'Escape') handleCancelModify();
                             }}
                             autoFocus
-                            className="w-20 px-2 py-0.5 bg-slate-700 border border-blue-500 rounded text-white text-sm focus:outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-auto [&::-webkit-inner-spin-button]:appearance-auto"
+                            className="w-20 px-2 py-0.5 bg-slate-700 border border-blue-500 rounded text-white text-sm focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-auto [&::-webkit-inner-spin-button]:appearance-auto"
                           />
                           <button
                             onClick={handleConfirmModify}
@@ -259,59 +343,66 @@ export default function OrderList() {
                             onClick={handleCancelModify}
                             className="px-2 py-0.5 text-xs bg-slate-600 hover:bg-slate-500 text-slate-300 rounded transition-colors"
                           >
-                            ✕
+                            X
                           </button>
                         </span>
                       ) : (
-                        order.quantity
+                        <span className="text-slate-300">{order.quantity}</span>
                       )}
                     </div>
                     {order.limitPrice && (
                       <div>
-                        <span className="text-slate-500">Limit:</span> ${order.limitPrice}
+                        <span className="text-slate-500">Limit:</span>{' '}
+                        <span className="text-slate-300">${order.limitPrice}</span>
                       </div>
                     )}
                     <div>
-                      <span className="text-slate-500">Order term:</span> {order.actualDuration}
+                      <span className="text-slate-500">Term:</span>{' '}
+                      <span className="text-slate-300">{order.actualDuration}</span>
                     </div>
                     <div>
-                      <span className="text-slate-500">Session:</span> {order.sessionTime}
+                      <span className="text-slate-500">Session:</span>{' '}
+                      <span className="text-slate-300">{order.sessionTime}</span>
                     </div>
                     {order.scheduledFor && (
                       <div className="col-span-2">
                         <span className="text-slate-500">Next run:</span>{' '}
-                        {new Date(order.scheduledFor).toLocaleString()}
+                        <span className="text-slate-300">{new Date(order.scheduledFor).toLocaleString()}</span>
                       </div>
                     )}
                   </div>
                   {order.lastError && (
-                    <div className="mt-2 p-2 bg-red-500/10 border border-red-500/20 rounded text-xs text-red-400">
+                    <div className="mt-2 p-2.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
                       {order.lastError}
                     </div>
                   )}
                 </div>
-                <div className="ml-4 flex flex-col gap-2">
+                <div className="ml-4 flex flex-col gap-2 shrink-0">
                   {(order.status === 'PENDING' || order.status === 'SCHEDULED') && (
                     <>
                       <button
-                        onClick={() => handleSubmit(order.id)}
+                        onClick={() =>
+                          setConfirmAction({ orderId: order.id, type: 'submit', label: 'Submit' })
+                        }
                         disabled={submittingId === order.id}
-                        className="px-3 py-1 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded transition-colors"
+                        className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded-lg transition-colors font-medium"
                       >
-                        {submittingId === order.id ? 'Submitting...' : 'Submit Now'}
+                        {submittingId === order.id ? 'Sending...' : 'Submit'}
                       </button>
                       <button
                         onClick={() => handleStartModify(order)}
                         disabled={modifyingId === order.id}
-                        className="px-3 py-1 text-sm bg-amber-600 hover:bg-amber-700 disabled:bg-amber-600/50 text-white rounded transition-colors"
+                        className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 disabled:bg-slate-700/50 text-slate-300 rounded-lg transition-colors font-medium"
                       >
                         Modify
                       </button>
                     </>
                   )}
                   <button
-                    onClick={() => handleDelete(order.id)}
-                    className="px-3 py-1 text-sm bg-red-600/20 hover:bg-red-600/30 text-red-400 rounded transition-colors"
+                    onClick={() =>
+                      setConfirmAction({ orderId: order.id, type: 'delete', label: 'Delete' })
+                    }
+                    className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
                   >
                     Delete
                   </button>

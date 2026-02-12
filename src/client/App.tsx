@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrderList from './components/OrderList';
 import OrderForm from './components/OrderForm';
+import QuickSend from './components/QuickSend';
 import OptionsChain from './components/OptionsChain';
 import ExpiredOrders from './components/ExpiredOrders';
 import PositionsCushion from './components/PositionsCushion';
@@ -15,7 +16,7 @@ import {
   type OrderHistoryDraft,
 } from './utils/orderHistory';
 
-type Tab = 'orders' | 'create' | 'options' | 'positions' | 'expired';
+type Tab = 'orders' | 'create' | 'quicksend' | 'options' | 'positions' | 'expired';
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('orders');
@@ -97,35 +98,43 @@ function App() {
       {historyMenuOpen && (
         <div className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm" aria-hidden="true" />
       )}
-      <header className="bg-slate-800 border-b border-slate-700">
-        <div className="container mx-auto px-4 py-4 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-white">E*TRADE Trade Placer</h1>
-            <p className="text-slate-400 text-sm mt-1">Automated daily trading system</p>
+      <header className="bg-gradient-to-r from-slate-800 via-slate-800 to-slate-900 border-b border-slate-700/50">
+        <div className="container mx-auto px-4 py-4 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/20">
+              <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+              </svg>
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-white tracking-tight">Trade Placer</h1>
+              <p className="text-slate-500 text-xs">Automated E*TRADE orders</p>
+            </div>
           </div>
-          <div className="flex items-center shrink-0 pt-1">
+          <div className="flex items-center shrink-0">
             <AuthWidget />
           </div>
         </div>
       </header>
 
-      <nav className="bg-slate-800 border-b border-slate-700">
+      <nav className="bg-slate-800/50 border-b border-slate-700/50 backdrop-blur-sm sticky top-0 z-30">
         <div className="container mx-auto px-4">
-          <div className="flex space-x-1">
+          <div className="flex gap-1 py-2 overflow-x-auto scrollbar-none">
             {[
               { id: 'orders', label: 'Active Orders' },
               { id: 'create', label: 'Create Order' },
+              { id: 'quicksend', label: 'Quick Send' },
               { id: 'options', label: 'Options Chain' },
-              { id: 'positions', label: 'Trade Ideas (Max Pain)' },
-              { id: 'expired', label: 'Expired Orders' },
+              { id: 'positions', label: 'Trade Ideas' },
+              { id: 'expired', label: 'Expired' },
             ].map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id as Tab)}
-                className={`px-4 py-3 font-medium transition-colors ${
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all whitespace-nowrap ${
                   activeTab === tab.id
-                    ? 'text-blue-400 border-b-2 border-blue-400'
-                    : 'text-slate-400 hover:text-slate-200'
+                    ? 'bg-blue-600/20 text-blue-400 shadow-sm'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
                 }`}
               >
                 {tab.label}
@@ -137,6 +146,9 @@ function App() {
 
       <main className="container mx-auto px-4 py-6">
         {activeTab === 'orders' && <OrderList />}
+        {activeTab === 'quicksend' && (
+          <QuickSend orderHistory={orderHistory} onOrderSent={handleOrderCreated} />
+        )}
         {activeTab === 'create' && (
           <div className="w-full max-w-md mx-auto">
             {orderHistory.length > 0 && (
