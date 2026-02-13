@@ -85,7 +85,7 @@ export class OrderService {
     scheduleEnabled?: boolean;
     limit?: number;
   }): Promise<Order[]> {
-    let sql = 'SELECT * FROM orders WHERE 1=1';
+    let sql = "SELECT * FROM orders WHERE status != 'DELETED'";
     const params: any[] = [];
     let paramCount = 1;
 
@@ -244,7 +244,61 @@ export class OrderService {
   }
 
   async deleteOrder(id: string): Promise<void> {
-    await query('DELETE FROM orders WHERE id = $1', [id]);
+    await query(
+      "UPDATE orders SET status = 'DELETED', updated_at = NOW() WHERE id = $1",
+      [id]
+    );
+  }
+
+  async getDeletedOrders(limit: number = 50): Promise<Order[]> {
+    const result = await query<Order>(
+      `SELECT * FROM orders
+       WHERE status = 'DELETED'
+       ORDER BY updated_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+    return result.rows.map((row) => this.mapRowToOrder(row));
+  }
+
+  async restoreOrder(id: string): Promise<Order | null> {
+    const result = await query<Order>(
+      "UPDATE orders SET status = 'PENDING', updated_at = NOW() WHERE id = $1 AND status = 'DELETED' RETURNING *",
+      [id]
+    );
+    return result.rows.length > 0 ? this.mapRowToOrder(result.rows[0]) : null;
+  }
+
+  async permanentlyDeleteOrder(id: string): Promise<void> {
+    await query("DELETE FROM orders WHERE id = $1 AND status = 'DELETED'", [id]);
+  }
+
+  async pauseAllScheduled(): Promise<number> {
+    const result = await query(
+      "UPDATE orders SET status = 'PAUSED', updated_at = NOW() WHERE status = 'SCHEDULED' RETURNING id"
+    );
+    return result.rowCount ?? 0;
+  }
+
+  async resumeAllPaused(): Promise<number> {
+    const result = await query(
+      "UPDATE orders SET status = 'SCHEDULED', updated_at = NOW() WHERE status = 'PAUSED' RETURNING id"
+    );
+    return result.rowCount ?? 0;
+  }
+
+  async pauseOrder(id: string): Promise<void> {
+    await query(
+      "UPDATE orders SET status = 'PAUSED', updated_at = NOW() WHERE id = $1 AND status = 'SCHEDULED'",
+      [id]
+    );
+  }
+
+  async resumeOrder(id: string): Promise<void> {
+    await query(
+      "UPDATE orders SET status = 'SCHEDULED', updated_at = NOW() WHERE id = $1 AND status = 'PAUSED'",
+      [id]
+    );
   }
 
   async acquireLock(orderId: string, lockerId: string): Promise<boolean> {
@@ -329,7 +383,7 @@ export class OrderService {
       `SELECT * FROM orders
        WHERE security_type = 'OPTION'
        AND expiration_date IS NOT NULL
-       AND status IN ('PENDING', 'SCHEDULED')
+       AND status IN ('PENDING', 'SCHEDULED', 'PAUSED')
        AND (expiration_date::date + INTERVAL '20 hours') AT TIME ZONE 'America/New_York' < NOW()
        ORDER BY expiration_date ASC`
     );
@@ -340,7 +394,7 @@ export class OrderService {
     const result = await query<Order>(
       `SELECT * FROM orders
        WHERE threshold_enabled = true
-       AND status IN ('PENDING', 'SCHEDULED')
+       AND status IN ('PENDING', 'SCHEDULED', 'PAUSED')
        ORDER BY created_at ASC`
     );
     return result.rows.map((row) => this.mapRowToOrder(row));
@@ -351,7 +405,7 @@ export class OrderService {
       `SELECT * FROM orders
        WHERE sell_order_enabled = true
        AND sell_order_triggered_by_order_id = $1
-       AND status IN ('PENDING', 'SCHEDULED')`,
+       AND status IN ('PENDING', 'SCHEDULED', 'PAUSED')`,
       [buyOrderId]
     );
     return result.rows.map((row) => this.mapRowToOrder(row));

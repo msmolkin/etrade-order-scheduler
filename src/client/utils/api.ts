@@ -225,6 +225,62 @@ export async function deleteOrder(orderId: string): Promise<void> {
   if (!response.ok) throw new Error('Failed to delete order');
 }
 
+export async function fetchDeletedOrders(limit?: number): Promise<Order[]> {
+  const params = new URLSearchParams();
+  if (limit) params.append('limit', String(limit));
+
+  const response = await fetch(`${API_BASE_URL}/orders/deleted/list?${params}`);
+  if (!response.ok) throw new Error('Failed to fetch deleted orders');
+  return response.json();
+}
+
+export async function restoreOrder(orderId: string): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}/restore`, {
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error('Failed to restore order');
+  return response.json();
+}
+
+export async function permanentlyDeleteOrder(orderId: string): Promise<void> {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}/permanent`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) throw new Error('Failed to permanently delete order');
+}
+
+export async function pauseAllOrders(): Promise<{ paused: number }> {
+  const response = await fetch(`${API_BASE_URL}/orders/pause-all`, {
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error('Failed to pause orders');
+  return response.json();
+}
+
+export async function resumeAllOrders(): Promise<{ resumed: number }> {
+  const response = await fetch(`${API_BASE_URL}/orders/resume-all`, {
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error('Failed to resume orders');
+  return response.json();
+}
+
+export async function pauseOrder(orderId: string): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}/pause`, {
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error('Failed to pause order');
+  return response.json();
+}
+
+export async function resumeOrder(orderId: string): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}/resume`, {
+    method: 'POST',
+  });
+  if (!response.ok) throw new Error('Failed to resume order');
+  return response.json();
+}
+
 export async function submitOrder(orderId: string): Promise<{ success: boolean; order: Order }> {
   const response = await fetch(`${API_BASE_URL}/orders/${orderId}/submit`, {
     method: 'POST',

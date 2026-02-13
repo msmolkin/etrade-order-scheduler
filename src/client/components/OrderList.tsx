@@ -1,25 +1,33 @@
 import React, { useEffect, useState } from 'react';
-import { fetchOrders, deleteOrder, submitOrder, updateOrderQuantity, updateOrderLimitPrice, type Order } from '../utils/api';
+import {
+  fetchOrders, deleteOrder, submitOrder, updateOrderQuantity, updateOrderLimitPrice,
+  fetchDeletedOrders, restoreOrder, permanentlyDeleteOrder,
+  pauseAllOrders, resumeAllOrders, pauseOrder, resumeOrder,
+  type Order,
+} from '../utils/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 type Toast = { id: number; message: string; type: 'success' | 'error' };
 type ConfirmAction = {
   orderId: string;
-  type: 'delete' | 'submit';
+  type: 'delete' | 'submit' | 'permanent-delete';
   label: string;
 };
+
+type FilterTab = 'all' | 'scheduled' | 'paused' | 'pending' | 'submitted' | 'failed' | 'complete' | 'deleted';
 
 let toastId = 0;
 
 export default function OrderList() {
   const [orders, setOrders] = useState<Order[]>([]);
+  const [deletedOrders, setDeletedOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [modifyingId, setModifyingId] = useState<string | null>(null);
   const [modifyQuantity, setModifyQuantity] = useState<number>(1);
   const [modifyPrice, setModifyPrice] = useState<string>('');
   const [modifyingSaving, setModifyingSaving] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'scheduled' | 'pending' | 'submitted' | 'failed' | 'complete'>('all');
+  const [filter, setFilter] = useState<FilterTab>('all');
   const { isConnected, lastMessage } = useWebSocket('ws://localhost:3001/ws');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
@@ -33,8 +41,12 @@ export default function OrderList() {
   const loadOrders = async () => {
     try {
       setLoading(true);
-      const data = await fetchOrders();
+      const [data, deleted] = await Promise.all([
+        fetchOrders(),
+        fetchDeletedOrders(),
+      ]);
       setOrders(data);
+      setDeletedOrders(deleted);
     } catch (error) {
       console.error('Failed to load orders:', error);
     } finally {
@@ -55,11 +67,77 @@ export default function OrderList() {
   const handleDelete = async (orderId: string) => {
     try {
       await deleteOrder(orderId);
-      setOrders(orders.filter((o) => o.id !== orderId));
-      showToast('Order deleted', 'success');
+      loadOrders();
+      showToast('Order moved to Deleted', 'success');
     } catch (error) {
       console.error('Failed to delete order:', error);
       showToast('Failed to delete order', 'error');
+    }
+  };
+
+  const handlePermanentDelete = async (orderId: string) => {
+    try {
+      await permanentlyDeleteOrder(orderId);
+      loadOrders();
+      showToast('Order permanently deleted', 'success');
+    } catch (error) {
+      console.error('Failed to permanently delete order:', error);
+      showToast('Failed to permanently delete', 'error');
+    }
+  };
+
+  const handleRestore = async (orderId: string) => {
+    try {
+      await restoreOrder(orderId);
+      loadOrders();
+      showToast('Order restored', 'success');
+    } catch (error) {
+      console.error('Failed to restore order:', error);
+      showToast('Failed to restore order', 'error');
+    }
+  };
+
+  const handlePauseOrder = async (orderId: string) => {
+    try {
+      await pauseOrder(orderId);
+      loadOrders();
+      showToast('Order paused', 'success');
+    } catch (error) {
+      console.error('Failed to pause order:', error);
+      showToast('Failed to pause order', 'error');
+    }
+  };
+
+  const handleResumeOrder = async (orderId: string) => {
+    try {
+      await resumeOrder(orderId);
+      loadOrders();
+      showToast('Order resumed', 'success');
+    } catch (error) {
+      console.error('Failed to resume order:', error);
+      showToast('Failed to resume order', 'error');
+    }
+  };
+
+  const handlePauseAll = async () => {
+    try {
+      const result = await pauseAllOrders();
+      loadOrders();
+      showToast(`Paused ${result.paused} order(s)`, 'success');
+    } catch (error) {
+      console.error('Failed to pause all:', error);
+      showToast('Failed to pause all orders', 'error');
+    }
+  };
+
+  const handleResumeAll = async () => {
+    try {
+      const result = await resumeAllOrders();
+      loadOrders();
+      showToast(`Resumed ${result.resumed} order(s)`, 'success');
+    } catch (error) {
+      console.error('Failed to resume all:', error);
+      showToast('Failed to resume all orders', 'error');
     }
   };
 
@@ -84,6 +162,7 @@ export default function OrderList() {
   const handleConfirmAction = () => {
     if (!confirmAction) return;
     if (confirmAction.type === 'delete') handleDelete(confirmAction.orderId);
+    else if (confirmAction.type === 'permanent-delete') handlePermanentDelete(confirmAction.orderId);
     else handleSubmit(confirmAction.orderId);
     setConfirmAction(null);
   };
@@ -139,18 +218,26 @@ export default function OrderList() {
     return price < 1 ? '0.0001' : '0.01';
   };
 
-  const ACTIVE_STATUSES = ['PENDING', 'SCHEDULED', 'SUBMITTED'];
+  const ACTIVE_STATUSES = ['PENDING', 'SCHEDULED', 'SUBMITTED', 'PAUSED'];
   const COMPLETE_STATUSES = ['FILLED', 'REJECTED', 'CANCELLED', 'EXPIRED'];
 
-  const filteredOrders = orders.filter((order) => {
-    if (filter === 'all') return ACTIVE_STATUSES.includes(order.status) && !order.lastError;
-    if (filter === 'failed') return !!order.lastError && ACTIVE_STATUSES.includes(order.status);
-    if (filter === 'complete') return COMPLETE_STATUSES.includes(order.status);
-    if (filter === 'scheduled') return order.status === 'SCHEDULED' && !order.lastError;
-    if (filter === 'pending') return order.status === 'PENDING';
-    if (filter === 'submitted') return order.status === 'SUBMITTED';
-    return true;
-  });
+  const filteredOrders = filter === 'deleted'
+    ? deletedOrders
+    : orders.filter((order) => {
+        if (filter === 'all') return ACTIVE_STATUSES.includes(order.status) && !order.lastError;
+        if (filter === 'failed') return !!order.lastError && ACTIVE_STATUSES.includes(order.status);
+        if (filter === 'complete') return COMPLETE_STATUSES.includes(order.status);
+        if (filter === 'scheduled') return order.status === 'SCHEDULED' && !order.lastError;
+        if (filter === 'paused') return order.status === 'PAUSED';
+        if (filter === 'pending') return order.status === 'PENDING';
+        if (filter === 'submitted') return order.status === 'SUBMITTED';
+        return true;
+      });
+
+  const pausedCount = orders.filter((o) => o.status === 'PAUSED').length;
+  const scheduledCount = orders.filter((o) => o.status === 'SCHEDULED' && !o.lastError).length;
+  const hasPausedOrders = pausedCount > 0;
+  const hasScheduledOrders = scheduledCount > 0;
 
   const getStatusColor = (status: string) => {
     const colors: Record<string, string> = {
@@ -161,6 +248,8 @@ export default function OrderList() {
       REJECTED: 'bg-red-500/20 text-red-400 border border-red-500/30',
       CANCELLED: 'bg-gray-500/20 text-gray-400 border border-gray-500/30',
       EXPIRED: 'bg-orange-500/20 text-orange-400 border border-orange-500/30',
+      PAUSED: 'bg-amber-500/20 text-amber-400 border border-amber-500/30',
+      DELETED: 'bg-slate-500/20 text-slate-400 border border-slate-500/30',
     };
     return colors[status] || 'bg-gray-500/20 text-gray-400';
   };
@@ -224,18 +313,24 @@ export default function OrderList() {
             style={{ backgroundColor: '#1e293b', opacity: 1 }}
           >
             <h3 className="text-white font-semibold text-lg mb-2">
-              {confirmAction.type === 'delete' ? 'Delete order?' : 'Submit order?'}
+              {confirmAction.type === 'delete'
+                ? 'Delete order?'
+                : confirmAction.type === 'permanent-delete'
+                  ? 'Permanently delete?'
+                  : 'Submit order?'}
             </h3>
             <p className="text-slate-400 text-sm mb-5">
               {confirmAction.type === 'delete'
-                ? 'This will permanently remove the order.'
-                : 'This will submit the order to E*TRADE now.'}
+                ? 'This order will be moved to the Deleted tab. You can restore it later.'
+                : confirmAction.type === 'permanent-delete'
+                  ? 'This will permanently remove the order. This cannot be undone.'
+                  : 'This will submit the order to E*TRADE now.'}
             </p>
             <div className="flex gap-3">
               <button
                 onClick={handleConfirmAction}
                 className={`flex-1 py-2.5 rounded-lg font-medium text-sm transition-colors ${
-                  confirmAction.type === 'delete'
+                  confirmAction.type === 'delete' || confirmAction.type === 'permanent-delete'
                     ? 'bg-red-600 hover:bg-red-700 text-white'
                     : 'bg-green-600 hover:bg-green-700 text-white'
                 }`}
@@ -256,6 +351,19 @@ export default function OrderList() {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold text-white">Active Orders</h2>
         <div className="flex items-center gap-4">
+          {/* Pause All / Resume All toggle */}
+          {(hasScheduledOrders || hasPausedOrders) && (
+            <button
+              onClick={hasPausedOrders ? handleResumeAll : handlePauseAll}
+              className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium ${
+                hasPausedOrders
+                  ? 'bg-green-600/20 hover:bg-green-600/30 text-green-400'
+                  : 'bg-amber-600/20 hover:bg-amber-600/30 text-amber-400'
+              }`}
+            >
+              {hasPausedOrders ? 'Resume All' : 'Pause All'}
+            </button>
+          )}
           <div className="flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 shadow-sm shadow-green-500/50' : 'bg-red-500'}`} />
             <span className="text-sm text-slate-500">
@@ -272,21 +380,31 @@ export default function OrderList() {
       </div>
 
       <div className="flex gap-1.5 mb-5 flex-wrap">
-        {(['all', 'scheduled', 'pending', 'submitted', 'failed', 'complete'] as const).map((f) => {
+        {(['all', 'scheduled', 'paused', 'pending', 'submitted', 'failed', 'complete', 'deleted'] as const).map((f) => {
           const failedCount = orders.filter((o) => !!o.lastError && ACTIVE_STATUSES.includes(o.status)).length;
+          const count =
+            f === 'paused' ? pausedCount
+            : f === 'deleted' ? deletedOrders.length
+            : f === 'failed' ? failedCount
+            : 0;
           return (
             <button
               key={f}
               onClick={() => setFilter(f)}
               className={`px-3.5 py-1.5 rounded-lg capitalize text-sm font-medium transition-all ${
                 filter === f
-                  ? f === 'failed' ? 'bg-red-600 text-white shadow-sm shadow-red-600/30' : 'bg-blue-600/20 text-blue-400'
+                  ? f === 'failed' ? 'bg-red-600 text-white shadow-sm shadow-red-600/30'
+                    : f === 'paused' ? 'bg-amber-600/20 text-amber-400'
+                    : f === 'deleted' ? 'bg-slate-600/20 text-slate-400'
+                    : 'bg-blue-600/20 text-blue-400'
                   : f === 'failed' && failedCount > 0
                     ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
-                    : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
+                    : f === 'paused' && pausedCount > 0
+                      ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20'
+                      : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
               }`}
             >
-              {f}{f === 'failed' && failedCount > 0 ? ` (${failedCount})` : ''}
+              {f}{count > 0 ? ` (${count})` : ''}
             </button>
           );
         })}
@@ -304,11 +422,14 @@ export default function OrderList() {
           {filteredOrders.map((order) => {
             const isModifying = modifyingId === order.id;
             const priceStep = getPriceStep(order);
+            const isDeleted = order.status === 'DELETED';
 
             return (
               <div
                 key={order.id}
-                className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600/80 transition-all"
+                className={`bg-slate-800/80 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600/80 transition-all ${
+                  isDeleted ? 'opacity-70' : ''
+                }`}
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
@@ -443,37 +564,79 @@ export default function OrderList() {
                     )}
                   </div>
                   <div className="ml-4 flex flex-col gap-2 shrink-0">
-                    {(order.status === 'PENDING' || order.status === 'SCHEDULED') && (
+                    {/* Deleted order actions */}
+                    {isDeleted && (
                       <>
                         <button
-                          onClick={() =>
-                            setConfirmAction({ orderId: order.id, type: 'submit', label: 'Submit' })
-                          }
-                          disabled={submittingId === order.id}
-                          className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded-lg transition-colors font-medium"
+                          onClick={() => handleRestore(order.id)}
+                          className="px-3 py-1.5 text-sm bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-lg transition-colors font-medium"
                         >
-                          {submittingId === order.id ? 'Sending...' : 'Submit'}
+                          Restore
                         </button>
                         <button
-                          onClick={() => isModifying ? handleCancelModify() : handleStartModify(order)}
-                          className={`px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${
-                            isModifying
-                              ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
-                              : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
-                          }`}
+                          onClick={() =>
+                            setConfirmAction({ orderId: order.id, type: 'permanent-delete', label: 'Delete Forever' })
+                          }
+                          className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
                         >
-                          {isModifying ? 'Done' : 'Modify'}
+                          Delete Forever
                         </button>
                       </>
                     )}
-                    <button
-                      onClick={() =>
-                        setConfirmAction({ orderId: order.id, type: 'delete', label: 'Delete' })
-                      }
-                      className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
-                    >
-                      Delete
-                    </button>
+                    {/* Active order actions */}
+                    {!isDeleted && (order.status === 'PENDING' || order.status === 'SCHEDULED' || order.status === 'PAUSED') && (
+                      <>
+                        {order.status !== 'PAUSED' && (
+                          <button
+                            onClick={() =>
+                              setConfirmAction({ orderId: order.id, type: 'submit', label: 'Submit' })
+                            }
+                            disabled={submittingId === order.id}
+                            className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded-lg transition-colors font-medium"
+                          >
+                            {submittingId === order.id ? 'Sending...' : 'Submit'}
+                          </button>
+                        )}
+                        {order.status === 'SCHEDULED' && (
+                          <button
+                            onClick={() => handlePauseOrder(order.id)}
+                            className="px-3 py-1.5 text-sm bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 rounded-lg transition-colors font-medium"
+                          >
+                            Pause
+                          </button>
+                        )}
+                        {order.status === 'PAUSED' && (
+                          <button
+                            onClick={() => handleResumeOrder(order.id)}
+                            className="px-3 py-1.5 text-sm bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded-lg transition-colors font-medium"
+                          >
+                            Resume
+                          </button>
+                        )}
+                        {order.status !== 'PAUSED' && (
+                          <button
+                            onClick={() => isModifying ? handleCancelModify() : handleStartModify(order)}
+                            className={`px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${
+                              isModifying
+                                ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
+                                : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                            }`}
+                          >
+                            {isModifying ? 'Done' : 'Modify'}
+                          </button>
+                        )}
+                      </>
+                    )}
+                    {!isDeleted && (
+                      <button
+                        onClick={() =>
+                          setConfirmAction({ orderId: order.id, type: 'delete', label: 'Delete' })
+                        }
+                        className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
+                      >
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

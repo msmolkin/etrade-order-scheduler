@@ -106,6 +106,19 @@ router.get('/expired', async (req, res) => {
   }
 });
 
+// Get deleted orders
+router.get('/deleted/list', async (req, res) => {
+  try {
+    const { limit } = req.query;
+    const orders = await orderService.getDeletedOrders(
+      limit ? parseInt(limit as string) : 50
+    );
+    res.json(orders);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get single order
 router.get('/:id', async (req, res) => {
   try {
@@ -401,11 +414,81 @@ router.patch('/:id', async (req, res) => {
   }
 });
 
-// Delete order
+// Soft-delete order (sets status to DELETED)
 router.delete('/:id', async (req, res) => {
   try {
     await orderService.deleteOrder(req.params.id);
+    const order = await orderService.getOrder(req.params.id);
+    if (order) broadcastOrderUpdate(order);
     res.status(204).send();
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Restore a deleted order
+router.post('/:id/restore', async (req, res) => {
+  try {
+    const order = await orderService.restoreOrder(req.params.id);
+    if (!order) {
+      return res.status(404).json({ error: 'Deleted order not found' });
+    }
+    broadcastOrderUpdate(order);
+    res.json(order);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Permanently delete order (only if already soft-deleted)
+router.delete('/:id/permanent', async (req, res) => {
+  try {
+    await orderService.permanentlyDeleteOrder(req.params.id);
+    res.status(204).send();
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Pause all scheduled orders
+router.post('/pause-all', async (req, res) => {
+  try {
+    const count = await orderService.pauseAllScheduled();
+    res.json({ paused: count });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Resume all paused orders
+router.post('/resume-all', async (req, res) => {
+  try {
+    const count = await orderService.resumeAllPaused();
+    res.json({ resumed: count });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Pause a single order
+router.post('/:id/pause', async (req, res) => {
+  try {
+    await orderService.pauseOrder(req.params.id);
+    const order = await orderService.getOrder(req.params.id);
+    if (order) broadcastOrderUpdate(order);
+    res.json(order);
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Resume a single order
+router.post('/:id/resume', async (req, res) => {
+  try {
+    await orderService.resumeOrder(req.params.id);
+    const order = await orderService.getOrder(req.params.id);
+    if (order) broadcastOrderUpdate(order);
+    res.json(order);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
