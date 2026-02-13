@@ -51,6 +51,7 @@ src/**/*.js.map
 
 # Claude Code settings
 .claude/
+CLAUDE.md
 
 # API test results
 etrade-documentation/api-test-results/
