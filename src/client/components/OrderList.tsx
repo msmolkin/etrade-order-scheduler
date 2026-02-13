@@ -215,8 +215,14 @@ export default function OrderList() {
 
       {/* Inline confirmation dialog */}
       {confirmAction && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="bg-slate-800 border border-slate-600 rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm"
+          style={{ backgroundColor: 'rgba(0,0,0,0.6)', opacity: 1 }}
+        >
+          <div
+            className="border border-slate-600 rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl"
+            style={{ backgroundColor: '#1e293b', opacity: 1 }}
+          >
             <h3 className="text-white font-semibold text-lg mb-2">
               {confirmAction.type === 'delete' ? 'Delete order?' : 'Submit order?'}
             </h3>
