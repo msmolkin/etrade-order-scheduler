@@ -205,6 +205,19 @@ export async function updateOrderQuantity(orderId: string, quantity: number): Pr
   return response.json();
 }
 
+export async function updateOrderLimitPrice(orderId: string, limitPrice: number): Promise<Order> {
+  const response = await fetch(`${API_BASE_URL}/orders/${orderId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ limitPrice }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error || 'Failed to update order limit price');
+  }
+  return response.json();
+}
+
 export async function deleteOrder(orderId: string): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/orders/${orderId}`, {
     method: 'DELETE',

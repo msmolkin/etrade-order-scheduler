@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { fetchOrders, deleteOrder, submitOrder, updateOrderQuantity, type Order } from '../utils/api';
+import { fetchOrders, deleteOrder, submitOrder, updateOrderQuantity, updateOrderLimitPrice, type Order } from '../utils/api';
 import { useWebSocket } from '../hooks/useWebSocket';
 
 type Toast = { id: number; message: string; type: 'success' | 'error' };
@@ -17,6 +17,7 @@ export default function OrderList() {
   const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [modifyingId, setModifyingId] = useState<string | null>(null);
   const [modifyQuantity, setModifyQuantity] = useState<number>(1);
+  const [modifyPrice, setModifyPrice] = useState<string>('');
   const [modifyingSaving, setModifyingSaving] = useState(false);
   const [filter, setFilter] = useState<'all' | 'scheduled' | 'pending' | 'submitted' | 'failed' | 'complete'>('all');
   const { isConnected, lastMessage } = useWebSocket('ws://localhost:3001/ws');
@@ -90,17 +91,17 @@ export default function OrderList() {
   const handleStartModify = (order: Order) => {
     setModifyingId(order.id);
     setModifyQuantity(order.quantity);
+    setModifyPrice(order.limitPrice != null ? String(order.limitPrice) : '');
   };
 
   const handleCancelModify = () => {
     setModifyingId(null);
   };
 
-  const handleConfirmModify = async () => {
-    if (!modifyingId) return;
+  const handleSaveQuantity = async (orderId: string) => {
     try {
       setModifyingSaving(true);
-      await updateOrderQuantity(modifyingId, modifyQuantity);
+      await updateOrderQuantity(orderId, modifyQuantity);
       setModifyingId(null);
       loadOrders();
       showToast('Quantity updated', 'success');
@@ -110,6 +111,32 @@ export default function OrderList() {
     } finally {
       setModifyingSaving(false);
     }
+  };
+
+  const handleSavePrice = async (orderId: string) => {
+    const price = parseFloat(modifyPrice);
+    if (Number.isNaN(price) || price < 0) {
+      showToast('Invalid price', 'error');
+      return;
+    }
+    try {
+      setModifyingSaving(true);
+      await updateOrderLimitPrice(orderId, price);
+      setModifyingId(null);
+      loadOrders();
+      showToast('Limit price updated', 'success');
+    } catch (error: any) {
+      console.error('Failed to update price:', error);
+      showToast(`Failed to update price: ${error.message}`, 'error');
+    } finally {
+      setModifyingSaving(false);
+    }
+  };
+
+  /** Price step: 0.0001 for penny stocks (< $1), 0.01 otherwise */
+  const getPriceStep = (order: Order): string => {
+    const price = order.limitPrice ?? 0;
+    return price < 1 ? '0.0001' : '0.01';
   };
 
   const ACTIVE_STATUSES = ['PENDING', 'SCHEDULED', 'SUBMITTED'];
@@ -174,7 +201,7 @@ export default function OrderList() {
         {toasts.map((toast) => (
           <div
             key={toast.id}
-            className={`px-4 py-3 rounded-lg shadow-lg text-sm font-medium animate-slide-in ${
+            className={`px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${
               toast.type === 'success'
                 ? 'bg-green-600 text-white'
                 : 'bg-red-600 text-white'
@@ -268,148 +295,184 @@ export default function OrderList() {
         </div>
       ) : (
         <div className="space-y-3">
-          {filteredOrders.map((order) => (
-            <div
-              key={order.id}
-              className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600/80 transition-all"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mb-2">
-                    <h3 className="text-lg font-bold text-white tracking-tight">{order.symbol}</h3>
-                    {order.securityType === 'OPTION' && (
-                      <span className="px-2 py-0.5 text-xs rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                        Option
-                      </span>
-                    )}
-                    <span className={`px-2 py-0.5 text-xs rounded-md font-medium ${getStatusColor(order.status)}`}>
-                      {order.status}
-                    </span>
-                    {getScheduleBadge(order) && (
-                      <span className="px-2 py-0.5 text-xs rounded-md bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                        {getScheduleBadge(order)}
-                      </span>
-                    )}
-                  </div>
-                  {order.securityType === 'OPTION' && (
-                    <div className="text-sm text-slate-300 mb-2">
-                      <span className="text-slate-500">Option:</span>{' '}
-                      {order.optionType ?? '\u2014'}{' '}
-                      {order.strikePrice != null ? `$${order.strikePrice}` : '\u2014'} exp{' '}
-                      {formatExpiration(order.expirationDate)}
-                    </div>
-                  )}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1.5 text-sm">
-                    <div>
-                      <span className="text-slate-500">Action:</span>{' '}
-                      <span className={order.action === 'BUY' || order.action === 'BUY_TO_COVER' ? 'text-green-400' : 'text-red-400'}>
-                        {order.action}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Type:</span>{' '}
-                      <span className="text-slate-300">{order.orderType}</span>
-                    </div>
-                    <div>
-                      <span className="text-slate-500">Qty:</span>{' '}
-                      {modifyingId === order.id ? (
-                        <span className="inline-flex items-center gap-1">
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            pattern="[0-9]*"
-                            min="1"
-                            step="1"
-                            value={modifyQuantity}
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value, 10);
-                              if (!Number.isNaN(val) && val >= 1) setModifyQuantity(val);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleConfirmModify();
-                              if (e.key === 'Escape') handleCancelModify();
-                            }}
-                            autoFocus
-                            className="w-20 px-2 py-0.5 bg-slate-700 border border-blue-500 rounded text-white text-sm focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-auto [&::-webkit-inner-spin-button]:appearance-auto"
-                          />
-                          <button
-                            onClick={handleConfirmModify}
-                            disabled={modifyingSaving}
-                            className="px-2 py-0.5 text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded transition-colors"
-                          >
-                            {modifyingSaving ? '...' : 'OK'}
-                          </button>
-                          <button
-                            onClick={handleCancelModify}
-                            className="px-2 py-0.5 text-xs bg-slate-600 hover:bg-slate-500 text-slate-300 rounded transition-colors"
-                          >
-                            X
-                          </button>
+          {filteredOrders.map((order) => {
+            const isModifying = modifyingId === order.id;
+            const priceStep = getPriceStep(order);
+
+            return (
+              <div
+                key={order.id}
+                className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600/80 transition-all"
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mb-2">
+                      <h3 className="text-lg font-bold text-white tracking-tight">{order.symbol}</h3>
+                      {order.securityType === 'OPTION' && (
+                        <span className="px-2 py-0.5 text-xs rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                          Option
                         </span>
-                      ) : (
-                        <span className="text-slate-300">{order.quantity}</span>
+                      )}
+                      <span className={`px-2 py-0.5 text-xs rounded-md font-medium ${getStatusColor(order.status)}`}>
+                        {order.status}
+                      </span>
+                      {getScheduleBadge(order) && (
+                        <span className="px-2 py-0.5 text-xs rounded-md bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                          {getScheduleBadge(order)}
+                        </span>
                       )}
                     </div>
-                    {order.limitPrice && (
-                      <div>
-                        <span className="text-slate-500">Limit:</span>{' '}
-                        <span className="text-slate-300">${order.limitPrice}</span>
+                    {order.securityType === 'OPTION' && (
+                      <div className="text-sm text-slate-300 mb-2">
+                        <span className="text-slate-500">Option:</span>{' '}
+                        {order.optionType ?? '\u2014'}{' '}
+                        {order.strikePrice != null ? `$${order.strikePrice}` : '\u2014'} exp{' '}
+                        {formatExpiration(order.expirationDate)}
                       </div>
                     )}
-                    <div>
-                      <span className="text-slate-500">Term:</span>{' '}
-                      <span className="text-slate-300">{order.actualDuration}</span>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1.5 text-sm">
+                      <div>
+                        <span className="text-slate-500">Action:</span>{' '}
+                        <span className={order.action === 'BUY' || order.action === 'BUY_TO_COVER' ? 'text-green-400' : 'text-red-400'}>
+                          {order.action}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Type:</span>{' '}
+                        <span className="text-slate-300">{order.orderType}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Qty:</span>{' '}
+                        {isModifying ? (
+                          <span className="inline-flex items-center gap-1">
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min="1"
+                              step="1"
+                              value={modifyQuantity}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10);
+                                if (!Number.isNaN(val) && val >= 1) setModifyQuantity(val);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleSaveQuantity(order.id);
+                                if (e.key === 'Escape') handleCancelModify();
+                              }}
+                              autoFocus
+                              className="w-20 px-2 py-0.5 bg-slate-700 border border-blue-500 rounded text-white text-sm focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-auto [&::-webkit-inner-spin-button]:appearance-auto"
+                            />
+                            <button
+                              onClick={() => handleSaveQuantity(order.id)}
+                              disabled={modifyingSaving}
+                              className="px-2 py-0.5 text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded transition-colors"
+                            >
+                              {modifyingSaving ? '...' : 'OK'}
+                            </button>
+                          </span>
+                        ) : (
+                          <span className="text-slate-300">{order.quantity}</span>
+                        )}
+                      </div>
+                      {order.limitPrice != null && (
+                        <div>
+                          <span className="text-slate-500">Limit:</span>{' '}
+                          {isModifying ? (
+                            <span className="inline-flex items-center gap-1">
+                              <input
+                                type="number"
+                                inputMode="decimal"
+                                min="0"
+                                step={priceStep}
+                                value={modifyPrice}
+                                onChange={(e) => setModifyPrice(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') handleSavePrice(order.id);
+                                  if (e.key === 'Escape') handleCancelModify();
+                                }}
+                                className="w-24 px-2 py-0.5 bg-slate-700 border border-blue-500 rounded text-white text-sm focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-auto [&::-webkit-inner-spin-button]:appearance-auto"
+                              />
+                              <button
+                                onClick={() => handleSavePrice(order.id)}
+                                disabled={modifyingSaving}
+                                className="px-2 py-0.5 text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded transition-colors"
+                              >
+                                {modifyingSaving ? '...' : 'OK'}
+                              </button>
+                            </span>
+                          ) : (
+                            <span className="text-slate-300">${order.limitPrice}</span>
+                          )}
+                        </div>
+                      )}
+                      <div>
+                        <span className="text-slate-500">Term:</span>{' '}
+                        <span className="text-slate-300">{order.actualDuration}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500">Session:</span>{' '}
+                        <span className="text-slate-300">{order.sessionTime}</span>
+                      </div>
+                      {order.scheduledFor && (
+                        <div className="col-span-2">
+                          <span className="text-slate-500">Next run:</span>{' '}
+                          <span className="text-slate-300">{new Date(order.scheduledFor).toLocaleString()}</span>
+                        </div>
+                      )}
                     </div>
-                    <div>
-                      <span className="text-slate-500">Session:</span>{' '}
-                      <span className="text-slate-300">{order.sessionTime}</span>
-                    </div>
-                    {order.scheduledFor && (
-                      <div className="col-span-2">
-                        <span className="text-slate-500">Next run:</span>{' '}
-                        <span className="text-slate-300">{new Date(order.scheduledFor).toLocaleString()}</span>
+                    {isModifying && (
+                      <div className="mt-2">
+                        <button
+                          onClick={handleCancelModify}
+                          className="px-2.5 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-400 rounded transition-colors"
+                        >
+                          Cancel editing
+                        </button>
+                      </div>
+                    )}
+                    {order.lastError && (
+                      <div className="mt-2 p-2.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
+                        {order.lastError}
                       </div>
                     )}
                   </div>
-                  {order.lastError && (
-                    <div className="mt-2 p-2.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
-                      {order.lastError}
-                    </div>
-                  )}
-                </div>
-                <div className="ml-4 flex flex-col gap-2 shrink-0">
-                  {(order.status === 'PENDING' || order.status === 'SCHEDULED') && (
-                    <>
-                      <button
-                        onClick={() =>
-                          setConfirmAction({ orderId: order.id, type: 'submit', label: 'Submit' })
-                        }
-                        disabled={submittingId === order.id}
-                        className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded-lg transition-colors font-medium"
-                      >
-                        {submittingId === order.id ? 'Sending...' : 'Submit'}
-                      </button>
-                      <button
-                        onClick={() => handleStartModify(order)}
-                        disabled={modifyingId === order.id}
-                        className="px-3 py-1.5 text-sm bg-slate-700 hover:bg-slate-600 disabled:bg-slate-700/50 text-slate-300 rounded-lg transition-colors font-medium"
-                      >
-                        Modify
-                      </button>
-                    </>
-                  )}
-                  <button
-                    onClick={() =>
-                      setConfirmAction({ orderId: order.id, type: 'delete', label: 'Delete' })
-                    }
-                    className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
-                  >
-                    Delete
-                  </button>
+                  <div className="ml-4 flex flex-col gap-2 shrink-0">
+                    {(order.status === 'PENDING' || order.status === 'SCHEDULED') && (
+                      <>
+                        <button
+                          onClick={() =>
+                            setConfirmAction({ orderId: order.id, type: 'submit', label: 'Submit' })
+                          }
+                          disabled={submittingId === order.id}
+                          className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded-lg transition-colors font-medium"
+                        >
+                          {submittingId === order.id ? 'Sending...' : 'Submit'}
+                        </button>
+                        <button
+                          onClick={() => isModifying ? handleCancelModify() : handleStartModify(order)}
+                          className={`px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${
+                            isModifying
+                              ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
+                              : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
+                          }`}
+                        >
+                          {isModifying ? 'Done' : 'Modify'}
+                        </button>
+                      </>
+                    )}
+                    <button
+                      onClick={() =>
+                        setConfirmAction({ orderId: order.id, type: 'delete', label: 'Delete' })
+                      }
+                      className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

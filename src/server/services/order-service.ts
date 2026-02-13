@@ -225,6 +225,16 @@ export class OrderService {
     );
   }
 
+  async updateOrderLimitPrice(id: string, limitPrice: number): Promise<void> {
+    if (typeof limitPrice !== 'number' || !Number.isFinite(limitPrice) || limitPrice < 0) {
+      throw new Error('Limit price must be a non-negative number');
+    }
+    await query(
+      'UPDATE orders SET limit_price = $2, updated_at = NOW() WHERE id = $1',
+      [id, limitPrice]
+    );
+  }
+
   async incrementRetryCount(id: string): Promise<number> {
     const result = await query<{ retry_count: number }>(
       'UPDATE orders SET retry_count = retry_count + 1 WHERE id = $1 RETURNING retry_count',

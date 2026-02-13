@@ -364,7 +364,7 @@ router.post('/:id/submit', async (req, res) => {
 // Update order
 router.patch('/:id', async (req, res) => {
   try {
-    const { status, expirationDate: rawExpiration, quantity, ...details } = req.body;
+    const { status, expirationDate: rawExpiration, quantity, limitPrice, ...details } = req.body;
 
     if (status) {
       await orderService.updateOrderStatus(req.params.id, status, details);
@@ -383,6 +383,14 @@ router.patch('/:id', async (req, res) => {
         return res.status(400).json({ error: 'Quantity must be a positive integer' });
       }
       await orderService.updateOrderQuantity(req.params.id, parsedQty);
+    }
+
+    if (limitPrice !== undefined) {
+      const parsedPrice = typeof limitPrice === 'number' ? limitPrice : parseFloat(String(limitPrice));
+      if (Number.isNaN(parsedPrice) || parsedPrice < 0) {
+        return res.status(400).json({ error: 'Limit price must be a non-negative number' });
+      }
+      await orderService.updateOrderLimitPrice(req.params.id, parsedPrice);
     }
 
     const order = await orderService.getOrder(req.params.id);
@@ -484,6 +492,18 @@ router.post('/test-place', async (req, res) => {
   }
 });
 
+/** Normalize E*TRADE quote: market data lives in .All with lastTrade (not last). */
+function normalizeQuote(raw: any): { symbol: string; bid: number; ask: number; last: number; lastTrade: number } {
+  const all = raw?.All ?? raw;
+  const bid = typeof all?.bid === 'number' ? all.bid : 0;
+  const ask = typeof all?.ask === 'number' ? all.ask : 0;
+  const lastTrade = typeof all?.lastTrade === 'number' ? all.lastTrade : 0;
+  const previousClose = typeof all?.previousClose === 'number' ? all.previousClose : 0;
+  const last = lastTrade || previousClose || (bid && ask ? (bid + ask) / 2 : bid || ask);
+  const symbol = raw?.symbol ?? all?.symbol ?? '';
+  return { symbol: String(symbol).toUpperCase(), bid, ask, last, lastTrade: lastTrade || last };
+}
+
 // Get quote
 router.get('/market/quote', async (req, res) => {
   try {
@@ -493,9 +513,15 @@ router.get('/market/quote', async (req, res) => {
       return res.status(400).json({ error: 'Symbols are required' });
     }
 
-    const symbolArray = (symbols as string).split(',');
+    const symbolArray = (symbols as string).split(',').map((s: string) => s.trim()).filter(Boolean);
+    if (symbolArray.length === 0) {
+      return res.status(400).json({ error: 'At least one symbol is required' });
+    }
+
     const client = getETradeClient();
-    const quotes = await client.getQuote(symbolArray);
+    const rawQuotes = await client.getQuote(symbolArray);
+    const list = Array.isArray(rawQuotes) ? rawQuotes : rawQuotes ? [rawQuotes] : [];
+    const quotes = list.map(normalizeQuote);
 
     res.json(quotes);
   } catch (error: any) {
