@@ -516,9 +516,10 @@ export class ETradeClient {
   /**
    * Get quote data for one or more symbols.
    * E*TRADE Market "Get Quote": GET /v1/market/quote/{symbols}
-   * 
-   * **Important:** The E*TRADE API returns quote data in a nested structure.
-   * The actual market data fields are nested inside an `All` object:
+   *
+   * **Important:** E*TRADE's API returns the wrong structure: market data is
+   * nested inside an `All` object instead of at top level. Always read via
+   * quote.All ?? quote. The actual market data fields are inside `All`:
    * 
    * ```typescript
    * {

@@ -59,56 +59,43 @@ export interface ETradeOrderResponse {
 }
 
 /**
- * Idealized quote interface for type safety.
- * 
- * **Note:** The actual E*TRADE API response has a different structure.
- * The real response nests market data inside an `All` object with different field names:
- * 
- * ```typescript
- * {
- *   dateTime: string,
- *   quoteStatus: string,
- *   All: {
- *     bid: number,
- *     ask: number,
- *     bidSize: number,
- *     askSize: number,
- *     lastTrade: number,        // Not "last"
- *     totalVolume: number,      // Not "volume"
- *     changeClose: number,      // Not "change"
- *     changeClosePercentage: number, // Not "changePct"
- *     high: number,
- *     low: number,
- *     open: number,
- *     previousClose: number,    // Not "close"
- *     // ... other fields
- *   }
- * }
- * ```
- * 
- * When working with quote data from `ETradeClient.getQuote()`, access fields via `quote.All`:
- * ```typescript
- * const quotes = await client.getQuote(['AMZN']);
- * const quoteData = quotes[0].All || quotes[0];
- * const bid = quoteData.bid;
- * const lastPrice = quoteData.lastTrade || quoteData.previousClose;
- * ```
+ * E*TRADE's Get Quote API returns the wrong structure: market data is nested under
+ * an `All` object and uses non-standard field names (e.g. `lastTrade` not `last`,
+ * `previousClose` not `close`). We do not rely on top-level bid/ask/last.
+ *
+ * Correct way to read quote data from `ETradeClient.getQuote()`:
+ *
+ *   const quotes = await client.getQuote(['AMZN']);
+ *   const data = quotes[0].All ?? quotes[0];   // always use .All first
+ *   const bid = data.bid;
+ *   const ask = data.ask;
+ *   const lastPrice = data.lastTrade ?? data.previousClose;
+ *
+ * Our GET /api/orders/market/quote route normalizes this and returns flat
+ * { symbol, bid, ask, last, lastTrade } so the client does not need to handle All.
  */
+
+/** Per-symbol quote row as returned by E*TRADE (market data is inside .All). */
 export interface ETradeQuote {
-  symbol: string;
-  bid: number;
-  ask: number;
-  last: number;
-  bidSize: number;
-  askSize: number;
-  volume: number;
-  lastTradeTime: number;
-  high52: number;
-  low52: number;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  change: number;
-  changePct: number;
+  symbol?: string;
+  dateTime?: string;
+  quoteStatus?: string;
+  /** Market data; E*TRADE incorrectly nests it here instead of at top level. */
+  All?: ETradeQuoteAll;
+}
+
+/** Market data payload inside quote.All. Use this when reading quote.All ?? quote. */
+export interface ETradeQuoteAll {
+  bid?: number;
+  ask?: number;
+  bidSize?: number;
+  askSize?: number;
+  lastTrade?: number;
+  previousClose?: number;
+  totalVolume?: number;
+  changeClose?: number;
+  changeClosePercentage?: number;
+  high?: number;
+  low?: number;
+  open?: number;
 }

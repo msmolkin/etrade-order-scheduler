@@ -117,15 +117,14 @@ function findHighestOiLegs(chain: OptionsChain): {
 
 function buildUnderlyingQuotesMap(quotes: ETradeQuote[]): Map<string, UnderlyingQuoteSummary> {
   const map = new Map<string, UnderlyingQuoteSummary>();
-  for (const q of quotes ?? []) {
-    const symbol = q.symbol?.toUpperCase?.() ?? '';
+  for (const raw of quotes ?? []) {
+    const data = raw.All ?? (raw as any);
+    const symbol = (raw.symbol ?? data.symbol)?.toString().toUpperCase() ?? '';
     if (!symbol) continue;
-    map.set(symbol, {
-      symbol,
-      bid: q.bid,
-      ask: q.ask,
-      last: q.last,
-    });
+    const bid = typeof data.bid === 'number' ? data.bid : 0;
+    const ask = typeof data.ask === 'number' ? data.ask : 0;
+    const last = typeof data.lastTrade === 'number' ? data.lastTrade : (typeof data.previousClose === 'number' ? data.previousClose : bid && ask ? (bid + ask) / 2 : bid || ask);
+    map.set(symbol, { symbol, bid, ask, last });
   }
   return map;
 }

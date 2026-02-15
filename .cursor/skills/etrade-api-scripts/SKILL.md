@@ -51,37 +51,21 @@ const credentials: ETradeCredentials = isSandbox
 ## Quotes
 
 - **Call**: `const quotes = await client.getQuote(['SYMBOL']);` (or multiple symbols).
-- **Response shape**: API returns market data **inside `quote.All`**, not on the top-level quote. `getQuote()` is typed as `ETradeQuote[]` but the real shape has `All`. Use:
+- **Return type**: `ETradeQuote[]` (from `src/shared/types/etrade.ts`). Each `ETradeQuote` has optional `symbol`, `dateTime`, `quoteStatus`, and `All?: ETradeQuoteAll`.
+- **Response shape**: E*TRADE's API returns the wrong structure: market data is nested under `All` and uses non-standard names (`lastTrade` not `last`, `previousClose` not `close`, etc.). **Always** read via `quote.All ?? quote`; never rely on top-level `bid`/`ask`/`last`. Use the shared `ETradeQuoteAll` type:
 
 ```ts
-// Type for raw market data (optional fields)
-interface ETradeQuoteAll {
-  lastTrade?: number;
-  previousClose?: number;
-  bid?: number;
-  ask?: number;
-  bidSize?: number;
-  askSize?: number;
-  totalVolume?: number;
-  previousDayVolume?: number;
-  high?: number;
-  low?: number;
-  open?: number;
-  changeClose?: number;
-  changeClosePercentage?: number;
-  companyName?: string;
-  symbolDescription?: string;
-  exDividendDate?: number;
-  dividend?: number;
-  lastSize?: number;
-  timeOfLastTrade?: number;
-}
+import type { ETradeQuote, ETradeQuoteAll } from '../shared/types/etrade.js';
 
-const quote = quotes[0] as ETradeQuoteAll & { All?: ETradeQuoteAll };
-const quoteData: ETradeQuoteAll = quote.All ?? quote;
+const quotes: ETradeQuote[] = await client.getQuote(['AMZN']);
+const data: ETradeQuoteAll = quotes[0].All ?? (quotes[0] as any);
+const bid = data.bid ?? 0;
+const ask = data.ask ?? 0;
+const lastPrice = data.lastTrade ?? data.previousClose ?? 0;
 ```
 
 - **Field names**: Use `lastTrade` (not `last`), `totalVolume` (not `volume`), `changeClose` / `changeClosePercentage`, `previousClose` (not `close`).
+- **Server normalization**: `GET /api/orders/market/quote?symbols=...` normalizes the raw shape and returns flat `{ symbol, bid, ask, last, lastTrade }` so the client does not need to handle `All`.
 
 ## Accounts
 
@@ -96,14 +80,89 @@ const quoteData: ETradeQuoteAll = quote.All ?? quote;
 
 ## Reference scripts
 
-| Script | Purpose |
-|--------|--------|
-| [oauth-flow.ts](src/scripts/oauth-flow.ts) | Full OAuth 1.0a flow, request token, authorize URL, access token, write to .env |
-| [get-micron-quote.ts](src/scripts/get-micron-quote.ts) | Quote fetch, `quote.All` / `ETradeQuoteAll`, streaming updates, minimal/CLI flags |
-| [execute-amzn-order.ts](src/scripts/execute-amzn-order.ts) | Accounts, quote, market buy order (placeOrder), account selection by ACCOUNT env |
-| [execute-wulf-order.ts](src/scripts/execute-wulf-order.ts) | Options: expiry dates, option chain, placeOrder for options |
-| [send-rgti-orders-now.ts](src/scripts/send-rgti-orders-now.ts) | Quote + order placement with retry; uses `quote.All` for bid/ask |
+Scripts are in `src/scripts/`. Use them as examples when implementing new E*TRADE API calls.
+
+### Authentication & accounts
+
+| Script | Why reference it |
+|--------|-----------------|
+| [oauth-flow.ts](src/scripts/oauth-flow.ts) | Full OAuth 1.0a flow: request token, authorize URL, access token, saving tokens to `.env`. The canonical example for credential setup. |
+| [list-accounts.ts](src/scripts/list-accounts.ts) | `getAccounts()` usage, account status filtering, credential loading boilerplate. |
+
+### Quotes & market data
+
+| Script | Why reference it |
+|--------|-----------------|
+| [get-micron-quote.ts](src/scripts/get-micron-quote.ts) | `getQuote()` with `quote.All` / `ETradeQuoteAll`, streaming updates (polling loop), minimal/CLI flags. The primary example of reading quote data correctly. |
+| [san-feb26-12-put-quote.ts](src/scripts/san-feb26-12-put-quote.ts) | Fetching quote data for a specific option contract (OSI key), bid/ask sizes. Shows option-level quoting. |
+| [test-market-data.ts](src/scripts/test-market-data.ts) | Tests market data endpoints and quote response structure. |
+
+### Order placement (equities)
+
+| Script | Why reference it |
+|--------|-----------------|
+| [buy-aapl.ts](src/scripts/buy-aapl.ts) | Simplest equity buy order (1 share, limit). Good starting template for new order scripts. |
+| [execute-amzn-order.ts](src/scripts/execute-amzn-order.ts) | Full workflow: `getAccounts` → `getQuote` (with `quote.All`) → `placeOrder`. Account selection by `ACCOUNT` env. |
+| [send-rgti-orders-now.ts](src/scripts/send-rgti-orders-now.ts) | Quote with retry + multiple order placements at bid/ask. Uses `quote.All` for bid/ask extraction with retry logic. |
+| [sezl-short-caffeinated.ts](src/scripts/sezl-short-caffeinated.ts) | Sequential short orders with polling for fills between orders. Demonstrates `placeOrder` + `getOrders` fill detection loop. |
+| [list-and-place-order.ts](src/scripts/list-and-place-order.ts) | Lists existing orders then places a new one. Shows `getOrders` + `placeOrder` together. |
+
+### Order placement (options)
+
+| Script | Why reference it |
+|--------|-----------------|
+| [execute-wulf-order.ts](src/scripts/execute-wulf-order.ts) | Options: fetching expiry dates, options chain, `placeOrder` for option contracts. Primary options-order example. |
+| [execute-xom-order.ts](src/scripts/execute-xom-order.ts) | Option sell order with manual option symbol construction. |
+| [execute-intc-order.ts](src/scripts/execute-intc-order.ts) | INTC call option sell order with detailed option symbol handling. |
+| [schedule-intc-option-orders.ts](src/scripts/schedule-intc-option-orders.ts) | Creates scheduled option orders for future execution via `OrderService.createOrder`. Shows DAILY scheduling with session time. |
+| [send-buy-close-now.ts](src/scripts/send-buy-close-now.ts) | Executes a BUY_TO_COVER option order immediately via `OrderExecutor`. Default limit pricing ($0.05). |
+
+### Threshold monitoring & price-triggered orders
+
+| Script | Why reference it |
+|--------|-----------------|
+| [mu-price-threshold-buy.ts](src/scripts/mu-price-threshold-buy.ts) | Polls `getQuote` and places buy orders when bid/ask cross thresholds. Full `quote.All` / `ETradeQuoteAll` pattern with bid/ask/lastTrade extraction. |
+| [silver-price-order.ts](src/scripts/silver-price-order.ts) | Monitors silver price (MetalpriceAPI or SLV quote fallback) and places threshold orders. Dual price source pattern. |
+
+### Overnight & extended session orders
+
+| Script | Why reference it |
+|--------|-----------------|
+| [send-slv-overnight-order.ts](src/scripts/send-slv-overnight-order.ts) | Preview-then-place for SLV using EXTENDED session. Documents that E*TRADE REST API does not support overnight. |
+| [webapitrd-overnight-preview-and-place.ts](src/scripts/webapitrd-overnight-preview-and-place.ts) | Places overnight orders using E*TRADE **website** API (previewtsp/placetsp), not REST. Uses JSESSIONID/stk1 auth, market session `3` for overnight. |
+| [test-overnight-market-session.ts](src/scripts/test-overnight-market-session.ts) | Tests various `marketSession` values via REST API to document what works and what doesn't. |
+| [test-webapitrd-previewtsp-market-session.ts](src/scripts/test-webapitrd-previewtsp-market-session.ts) | Tests E*TRADE website endpoint for market session values; documents session `3` = overnight. |
+
+### Order management & debugging
+
+| Script | Why reference it |
+|--------|-----------------|
+| [cancel-and-modify-orders.ts](src/scripts/cancel-and-modify-orders.ts) | `cancelOrder` + `modifyOrder` using direct OAuth 1.0a signing. |
+| [resubmit-orders-now.ts](src/scripts/resubmit-orders-now.ts) | Resubmits SCHEDULED orders via `OrderExecutor`. Shows retry/re-execution logic. |
+| [send-crca-order-now.ts](src/scripts/send-crca-order-now.ts) | Finds and immediately executes a specific scheduled order via `OrderExecutor`. |
+| [update-option-orders-expiration.ts](src/scripts/update-option-orders-expiration.ts) | Bulk database update of option order expiration dates. |
+| [check-all-orders.ts](src/scripts/check-all-orders.ts) | Database query checking order statuses and scheduling info (no E*TRADE API). |
+| [check-missed-orders.ts](src/scripts/check-missed-orders.ts) | Finds scheduled orders that should have run but didn't (timezone-aware). |
+| [check-stuck-order.ts](src/scripts/check-stuck-order.ts) | Inspects a stuck order's status and execution history (database). |
+| [check-crca-orders.ts](src/scripts/check-crca-orders.ts) | Symbol-specific order lookup in database. |
+| [fix-stuck-order.ts](src/scripts/fix-stuck-order.ts) | Releases locks and resets state for stuck orders (database transaction). |
+
+### Portfolio & strategy
+
+| Script | Why reference it |
+|--------|-----------------|
+| [find-covered-call-candidates.ts](src/scripts/find-covered-call-candidates.ts) | `getPortfolio` + `getOptionsChain` to scan positions for covered call opportunities. Shows portfolio analysis + options chain retrieval. |
+
+### Test scripts
+
+| Script | Why reference it |
+|--------|-----------------|
+| [test-all-apis.ts](src/scripts/test-all-apis.ts) | Comprehensive test exercising `getAccounts`, `getPortfolio`, `getQuote`, `getOrders`, `getOptionsChain`, `previewOrder`, `placeOrder`, `cancelOrder`. Useful as a broad API reference. |
+| [test-alert-details.ts](src/scripts/test-alert-details.ts) | Tests alert-related API endpoints with direct OAuth signing. |
 
 ## Server (API routes)
 
-- **ETradeClient** is obtained via `getETradeClient()` (or equivalent) in routes; credentials come from env. Quote route: `GET /api/orders/market/quote?symbols=AAPL,MSFT` → `client.getQuote(symbolArray)`.
+- **ETradeClient** is obtained via `getETradeClient()` (or equivalent) in routes; credentials come from env.
+- **Quote route**: `GET /api/orders/market/quote?symbols=AAPL,MSFT` → calls `client.getQuote(symbolArray)`, normalizes the `All` nesting via `normalizeQuote()`, and returns flat `{ symbol, bid, ask, last, lastTrade }[]` to the client.
+- **Options chain**: `GET /api/orders/market/options-chain?symbol=AAPL` → `client.getOptionsChain()`.
+- **Positions/cushions**: `GET /api/positions/cushions` → `client.getPortfolio()` + `client.getQuote()` (also uses `quote.All` via `buildUnderlyingQuotesMap()`).

@@ -282,7 +282,7 @@ aws events put-targets \
 
 #### Quote Response Structure
 
-The E*TRADE quote API returns data in a nested structure. Market data fields are located inside an `All` object:
+E*TRADE's Get Quote API returns a nested structure (we consider this incorrect: market data belongs at the top level). Their response puts market data inside an `All` object and uses non-standard field names. Our `GET /api/orders/market/quote` route normalizes this and returns flat `{ symbol, bid, ask, last, lastTrade }`. When calling `client.getQuote()` directly, use the payload inside `All`:
 
 ```json
 {
