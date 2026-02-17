@@ -194,10 +194,16 @@ export default function AuthWidget() {
         typeof document !== 'undefined' &&
         createPortal(
           <div
-            className="fixed inset-0 z-50 overflow-auto bg-black/70 backdrop-blur-sm"
+            className="fixed inset-0 z-50 overflow-auto backdrop-blur-sm"
             aria-modal="true"
             role="dialog"
-            style={{ position: 'fixed', inset: 0 }}
+            style={{
+              position: 'fixed',
+              inset: 0,
+              backgroundColor: 'rgba(0,0,0,0.7)',
+              opacity: 1,
+            }}
+            onClick={handleCloseModal}
           >
             <div
               className="flex min-h-full items-start justify-center pt-32 pb-8 px-6"
