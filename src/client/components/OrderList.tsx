@@ -12,6 +12,7 @@ type ConfirmAction = {
   orderId: string;
   type: 'delete' | 'submit' | 'permanent-delete';
   label: string;
+  anchor: { top: number; left: number; height: number };
 };
 
 type FilterTab = 'all' | 'scheduled' | 'paused' | 'pending' | 'submitted' | 'failed' | 'complete' | 'deleted';
@@ -67,7 +68,7 @@ export default function OrderList() {
   const handleDelete = async (orderId: string) => {
     try {
       await deleteOrder(orderId);
-      loadOrders();
+      setOrders((prev) => prev.map((o) => o.id === orderId ? { ...o, status: 'DELETED' } : o));
       showToast('Order moved to Deleted', 'success');
     } catch (error) {
       console.error('Failed to delete order:', error);
@@ -78,7 +79,7 @@ export default function OrderList() {
   const handlePermanentDelete = async (orderId: string) => {
     try {
       await permanentlyDeleteOrder(orderId);
-      loadOrders();
+      setDeletedOrders((prev) => prev.filter((o) => o.id !== orderId));
       showToast('Order permanently deleted', 'success');
     } catch (error) {
       console.error('Failed to permanently delete order:', error);
@@ -302,46 +303,46 @@ export default function OrderList() {
         ))}
       </div>
 
-      {/* Inline confirmation dialog */}
+      {/* Inline confirmation popover */}
       {confirmAction && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm"
-          style={{ backgroundColor: 'rgba(0,0,0,0.6)', opacity: 1 }}
+          className="fixed inset-0 z-50"
+          onClick={() => setConfirmAction(null)}
         >
           <div
-            className="border border-slate-600 rounded-xl p-6 max-w-sm w-full mx-4 shadow-2xl"
-            style={{ backgroundColor: '#1e293b', opacity: 1 }}
+            className="absolute border border-slate-600 rounded-xl p-4 shadow-2xl"
+            style={{
+              backgroundColor: '#1e293b',
+              right: window.innerWidth - confirmAction.anchor.left + 8,
+              top: confirmAction.anchor.top + confirmAction.anchor.height / 2,
+              transform: 'translateY(-50%)',
+              width: 200,
+            }}
+            onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="text-white font-semibold text-lg mb-2">
+            <p className="text-white font-semibold text-sm mb-3">
               {confirmAction.type === 'delete'
                 ? 'Delete order?'
                 : confirmAction.type === 'permanent-delete'
                   ? 'Permanently delete?'
                   : 'Submit order?'}
-            </h3>
-            <p className="text-slate-400 text-sm mb-5">
-              {confirmAction.type === 'delete'
-                ? 'This order will be moved to the Deleted tab. You can restore it later.'
-                : confirmAction.type === 'permanent-delete'
-                  ? 'This will permanently remove the order. This cannot be undone.'
-                  : 'This will submit the order to E*TRADE now.'}
             </p>
-            <div className="flex gap-3">
+            <div className="flex gap-2">
+              <button
+                onClick={() => setConfirmAction(null)}
+                className="flex-1 py-2 rounded-lg font-medium text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
+              >
+                Cancel
+              </button>
               <button
                 onClick={handleConfirmAction}
-                className={`flex-1 py-2.5 rounded-lg font-medium text-sm transition-colors ${
+                className={`flex-1 py-2 rounded-lg font-medium text-sm transition-colors ${
                   confirmAction.type === 'delete' || confirmAction.type === 'permanent-delete'
                     ? 'bg-red-600 hover:bg-red-700 text-white'
                     : 'bg-green-600 hover:bg-green-700 text-white'
                 }`}
               >
                 {confirmAction.label}
-              </button>
-              <button
-                onClick={() => setConfirmAction(null)}
-                className="flex-1 py-2.5 rounded-lg font-medium text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-              >
-                Cancel
               </button>
             </div>
           </div>
@@ -574,8 +575,8 @@ export default function OrderList() {
                           Restore
                         </button>
                         <button
-                          onClick={() =>
-                            setConfirmAction({ orderId: order.id, type: 'permanent-delete', label: 'Delete Forever' })
+                          onClick={(e) =>
+                            setConfirmAction({ orderId: order.id, type: 'permanent-delete', label: 'Delete Forever', anchor: e.currentTarget.getBoundingClientRect() })
                           }
                           className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
                         >
@@ -588,8 +589,8 @@ export default function OrderList() {
                       <>
                         {order.status !== 'PAUSED' && (
                           <button
-                            onClick={() =>
-                              setConfirmAction({ orderId: order.id, type: 'submit', label: 'Submit' })
+                            onClick={(e) =>
+                              setConfirmAction({ orderId: order.id, type: 'submit', label: 'Submit', anchor: e.currentTarget.getBoundingClientRect() })
                             }
                             disabled={submittingId === order.id}
                             className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded-lg transition-colors font-medium"
@@ -629,8 +630,8 @@ export default function OrderList() {
                     )}
                     {!isDeleted && (
                       <button
-                        onClick={() =>
-                          setConfirmAction({ orderId: order.id, type: 'delete', label: 'Delete' })
+                        onClick={(e) =>
+                          setConfirmAction({ orderId: order.id, type: 'delete', label: 'Delete', anchor: e.currentTarget.getBoundingClientRect() })
                         }
                         className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
                       >
