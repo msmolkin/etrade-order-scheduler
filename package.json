@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "predev": "pg_isready -q || /usr/local/opt/postgresql@14/bin/pg_ctl -D /usr/local/var/postgresql@14 start",
+    "prescheduler:local": "pg_isready -q || /usr/local/opt/postgresql@14/bin/pg_ctl -D /usr/local/var/postgresql@14 -l /tmp/pg14.log start",
     "dev": "concurrently \"npm run server:dev\" \"npm run client:dev\"",
     "server:dev": "tsx watch src/server/index.ts",
     "client:dev": "vite",
@@ -25,6 +26,8 @@
     "silver-price-order": "tsx src/scripts/silver-price-order.ts",
     "sezl:short:caffeinated": "caffeinate -s -i tsx src/scripts/sezl-short-caffeinated.ts",
     "sezl:short:caffeinated:sleep": "caffeinate -s -i tsx src/scripts/sezl-short-caffeinated.ts; h=$(date +%H); h=$((h+0)); [ $h -ge 20 ] && pmset sleepnow",
+    "pg:start": "/usr/local/opt/postgresql@14/bin/pg_ctl -D /usr/local/var/postgresql@14 -l /tmp/pg14.log start",
+    "pg:stop": "/usr/local/opt/postgresql@14/bin/pg_ctl -D /usr/local/var/postgresql@14 stop",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [

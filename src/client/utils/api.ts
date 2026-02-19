@@ -287,8 +287,14 @@ export async function submitOrder(orderId: string): Promise<{ success: boolean; 
     headers: { 'Content-Type': 'application/json' },
   });
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Failed to submit order');
+    const ct = response.headers.get('content-type') ?? '';
+    if (ct.includes('application/json')) {
+      const error = await response.json();
+      throw new Error(error.error || 'Failed to submit order');
+    }
+    throw new Error(
+      `Submit failed (${response.status}): API returned non-JSON. Is the backend the Node server? Check VITE_API_URL.`
+    );
   }
   return response.json();
 }

@@ -14,7 +14,10 @@
       "Bash(psql:*)",
       "Bash(lsof:*)",
       "Bash(kill:*)",
-      "Bash(ETRADE_SANDBOX=false npm run dev:*)"
+      "Bash(ETRADE_SANDBOX=false npm run dev:*)",
+      "Bash(npm run scheduler:local:*)",
+      "Bash(launchctl list:*)",
+      "Bash(echo:*)"
     ]
   }
 }
