@@ -410,3 +410,5 @@ MIT
 ## Disclaimer
 
 This software is for educational purposes. Use at your own risk. The author is not responsible for any financial losses incurred through the use of this software. Always test thoroughly with E*TRADE's sandbox environment before using real money.
+
+Et voila! Your E*TRADE is now finally usable.
