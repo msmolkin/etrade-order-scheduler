@@ -87,20 +87,43 @@ npm run db:migrate
 
 ### 3. E*TRADE OAuth Setup
 
-You need to obtain OAuth access tokens from E*TRADE:
+**Get your API credentials:**
 
 1. Go to [E*TRADE Developer Portal](https://developer.etrade.com)
-2. Create an application and get your Consumer Key and Secret
-3. Use the OAuth flow to get Access Token and Access Token Secret
-4. Add these to your `.env` file:
+2. Create an application and get your Consumer Key and Consumer Secret
+3. Add them to your `.env` file:
 
 ```bash
 ETRADE_CONSUMER_KEY=your_consumer_key
 ETRADE_CONSUMER_SECRET=your_consumer_secret
-ETRADE_ACCESS_TOKEN=your_access_token
-ETRADE_ACCESS_TOKEN_SECRET=your_access_token_secret
-ETRADE_SANDBOX=true  # Set to false for production
+ETRADE_USERNAME=your_etrade_username
+ETRADE_SANDBOX=false
 ```
+
+**Authenticate (choose one method):**
+
+**Option A — Browser OAuth (recommended for first-time setup):**
+
+1. Start the server (`npm run dev`)
+2. Open the app in your browser
+3. Click the **Auto-login** button in the status bar
+4. A Puppeteer browser opens E*TRADE's login page automatically
+5. Enter your E*TRADE password when prompted
+6. E*TRADE sends an SMS verification code — enter it in the app when prompted
+7. The app stores the OAuth tokens in memory for the session
+
+**Option B — Manual OAuth flow:**
+
+1. Visit `http://localhost:3001/api/auth/start` in your browser
+2. You'll be redirected to E*TRADE to authorize the application
+3. After authorizing, E*TRADE redirects back to `/api/auth/callback`
+4. The tokens are stored in memory — no static tokens needed in `.env`
+
+**Note:** E*TRADE OAuth tokens expire daily (end of ET trading day). The app needs to re-authenticate each morning. For automated daily re-auth, see the `etrade-morning.sh` script and the OTP relay setup in `docs/google-apps-script/`.
+
+**Optional — Automated OTP relay (for unattended daily re-auth):**
+
+The `docs/google-apps-script/` directory contains setup instructions for an automated OTP relay that forwards E*TRADE's SMS verification codes via Google Voice → Gmail → Apps Script → webhook, enabling fully unattended morning authentication.
 
 ### 4. Run Development Server
 
