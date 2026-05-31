@@ -62,29 +62,22 @@ export default function SystemStatusBar() {
       (!status.authenticated ||
         (testResult !== null && testResult.ok === false)));
 
-  const onAutoLogin = async () => {
+  const onAutoLogin = () => {
     if (btnState !== "idle") return;
     setBtnState("sending");
 
-    // Scroll the AuthFix hero into view while the request flies.
+    // Find and click AuthFix's auto-login button so it handles the
+    // sessionId and OTP flow properly.
     const hero = document.querySelector("[data-testid=authfix-hero]");
     if (hero) {
       (hero as HTMLElement).scrollIntoView({
         behavior: "smooth",
         block: "start",
       });
+      const btn = hero.querySelector("button");
+      if (btn && !btn.disabled) btn.click();
     } else {
       window.scrollTo({ top: 0, behavior: "smooth" });
-    }
-
-    try {
-      await fetch("/api/auth/auto", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ headless: true, clearCookies: true }),
-      });
-    } catch {
-      // Server error is fine — still mark sent so the user waits.
     }
     setBtnState("sent");
   };
