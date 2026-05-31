@@ -1,14 +1,16 @@
-import OAuth from 'oauth-1.0a';
-import crypto from 'crypto';
-import axios, { AxiosInstance } from 'axios';
+import OAuth from "oauth-1.0a";
+import crypto from "crypto";
+import axios, { AxiosInstance } from "axios";
+import { broadcastAuthStatus } from "../ws-broadcast.js";
 import type {
   ETradeCredentials,
   ETradeAccount,
   ETradeOrderRequest,
   ETradeOrderResponse,
   ETradeQuote,
+  ETradeQuoteAll,
   OptionsChain,
-} from '../../shared/types/index.js';
+} from "../../shared/types/index.js";
 
 export class ETradeClient {
   private oauth: OAuth;
@@ -20,19 +22,22 @@ export class ETradeClient {
   constructor(credentials: ETradeCredentials, sandbox: boolean = false) {
     this.credentials = credentials;
     // Keep logs low-noise by default; set ETRADE_HTTP_DEBUG=true for verbose request/response dumps.
-    this.debugHttp = process.env.ETRADE_HTTP_DEBUG === 'true';
+    this.debugHttp = process.env.ETRADE_HTTP_DEBUG === "true";
     this.baseUrl = sandbox
-      ? 'https://apisb.etrade.com'
-      : 'https://api.etrade.com';
+      ? "https://apisb.etrade.com"
+      : "https://api.etrade.com";
 
     this.oauth = new OAuth({
       consumer: {
         key: credentials.consumerKey,
         secret: credentials.consumerSecret,
       },
-      signature_method: 'HMAC-SHA1',
+      signature_method: "HMAC-SHA1",
       hash_function(base_string, key) {
-        return crypto.createHmac('sha1', key).update(base_string).digest('base64');
+        return crypto
+          .createHmac("sha1", key)
+          .update(base_string)
+          .digest("base64");
       },
     });
 
@@ -40,8 +45,8 @@ export class ETradeClient {
       baseURL: this.baseUrl,
       timeout: 30000,
       headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
+        "Content-Type": "application/json",
+        Accept: "application/json",
       },
     });
 
@@ -49,9 +54,9 @@ export class ETradeClient {
     if (this.debugHttp) {
       this.httpClient.interceptors.request.use((config) => {
         console.log(
-          'Axios request:',
+          "Axios request:",
           config.method?.toUpperCase(),
-          `${config.baseURL ?? ''}${config.url ?? ''}`
+          `${config.baseURL ?? ""}${config.url ?? ""}`,
         );
         return config;
       });
@@ -64,16 +69,16 @@ export class ETradeClient {
         const status = err.response?.status;
         if (status === 401 || status === 403) {
           err.message =
-            'E*TRADE session expired or invalid. Re-authenticate via OAuth to get new tokens (e.g. run the OAuth flow and update .env). If you already updated .env, restart the server so it loads the new tokens.';
+            "E*TRADE session expired or invalid. Re-authenticate via OAuth to get new tokens (e.g. run the OAuth flow and update .env). If you already updated .env, restart the server so it loads the new tokens.";
         }
         return Promise.reject(err);
-      }
+      },
     );
   }
 
-  private getAuthHeader(url: string, method: string = 'GET') {
+  private getAuthHeader(url: string, method: string = "GET") {
     if (!this.credentials.accessToken || !this.credentials.accessTokenSecret) {
-      throw new Error('Access tokens not set. Please authenticate first.');
+      throw new Error("Access tokens not set. Please authenticate first.");
     }
 
     const token = {
@@ -85,12 +90,81 @@ export class ETradeClient {
     return this.oauth.toHeader(authData);
   }
 
+  private parseETradeXmlError(data: unknown): string | null {
+    if (typeof data !== "string") return null;
+    const code = data.match(/<code[^>]*>([^<]+)<\/code>/i)?.[1]?.trim();
+    const message = data
+      .match(/<message[^>]*>([^<]+)<\/message>/i)?.[1]
+      ?.trim()
+      .replace(/&apos;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">");
+    if (!message) return null;
+    return code ? `E*TRADE error ${code}: ${message}` : message;
+  }
+
+  private throwIfETradeXmlError(data: unknown): void {
+    const message = this.parseETradeXmlError(data);
+    if (message) throw new Error(message);
+  }
+
   async getAccounts(): Promise<ETradeAccount[]> {
     const url = `${this.baseUrl}/v1/accounts/list`;
     const headers = this.getAuthHeader(url);
 
-    const response = await this.httpClient.get('/v1/accounts/list', { headers: headers as any });
+    const response = await this.httpClient.get("/v1/accounts/list", {
+      headers: headers as any,
+    });
     return response.data.AccountListResponse.Accounts.Account;
+  }
+
+  /** True when the client is bound to the E*TRADE sandbox API. */
+  private isSandbox(): boolean {
+    return this.baseUrl.includes("apisb.etrade.com");
+  }
+
+  async renewAccessToken(): Promise<{
+    success: boolean;
+    status?: number;
+    error?: string;
+  }> {
+    const url = `${this.baseUrl}/oauth/renew_access_token`;
+    const headers = this.getAuthHeader(url, "GET");
+    try {
+      const response = await this.httpClient.get("/oauth/renew_access_token", {
+        headers: headers as any,
+      });
+      broadcastAuthStatus({
+        authenticated: true,
+        sandbox: this.isSandbox(),
+        source: "renew",
+      });
+      return { success: true, status: response.status };
+    } catch (error: any) {
+      const errMsg: string = error?.message ?? "";
+      const errBody: string =
+        typeof error?.response?.data === "string"
+          ? error.response.data
+          : JSON.stringify(error?.response?.data ?? "");
+      const isTokenRejected =
+        /token_rejected|token_expired|oauth_problem/i.test(
+          `${errMsg} ${errBody}`,
+        ) || error?.response?.status === 401;
+      if (isTokenRejected) {
+        broadcastAuthStatus({
+          authenticated: false,
+          sandbox: this.isSandbox(),
+          source: "expired",
+        });
+      }
+      return {
+        success: false,
+        status: error.response?.status,
+        error: error.message,
+      };
+    }
   }
 
   /**
@@ -99,14 +173,14 @@ export class ETradeClient {
    */
   async previewOrder(request: ETradeOrderRequest): Promise<any> {
     const previewUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/preview`;
-    if (this.debugHttp) console.log('Calling preview URL:', previewUrl);
-    const previewHeaders = this.getAuthHeader(previewUrl, 'POST');
+    if (this.debugHttp) console.log("Calling preview URL:", previewUrl);
+    const previewHeaders = this.getAuthHeader(previewUrl, "POST");
 
-    const securityType = request.securityType || 'EQ';
+    const securityType = request.securityType || "EQ";
     const product: Record<string, any> =
-      securityType === 'OPTN'
+      securityType === "OPTN"
         ? {
-            securityType: 'OPTN',
+            securityType: "OPTN",
             symbol: request.symbol,
             ...(request.productId && { productId: request.productId }),
             ...(request.callPut && { callPut: request.callPut }),
@@ -114,7 +188,9 @@ export class ETradeClient {
               expiryYear: request.expiryYear,
               expiryMonth: request.expiryMonth,
               expiryDay: request.expiryDay,
-              ...(request.strikePrice != null && { strikePrice: request.strikePrice }),
+              ...(request.strikePrice != null && {
+                strikePrice: request.strikePrice,
+              }),
             }),
           }
         : { securityType, symbol: request.symbol };
@@ -123,12 +199,15 @@ export class ETradeClient {
       allOrNone: request.allOrNone || false,
       priceType: request.priceType,
       orderTerm: request.orderTerm,
-      marketSession: request.marketSession,
+      marketSession:
+        request.priceType === "MARKET" || securityType === "OPTN"
+          ? "REGULAR"
+          : request.marketSession,
       Instrument: [
         {
           Product: product,
           orderAction: request.orderAction,
-          quantityType: 'QUANTITY',
+          quantityType: "QUANTITY",
           quantity: request.quantity,
         },
       ],
@@ -150,69 +229,95 @@ export class ETradeClient {
     try {
       const requestBody = { PreviewOrderRequest: orderPayload };
       if (this.debugHttp) {
-        console.log('\n┌─────────────────────────────────────────────────────────────┐');
-        console.log('│  ORDER PREVIEW REQUEST                                      │');
-        console.log('└─────────────────────────────────────────────────────────────┘');
-        console.log('1) API URL:');
+        console.log(
+          "\n┌─────────────────────────────────────────────────────────────┐",
+        );
+        console.log(
+          "│  ORDER PREVIEW REQUEST                                      │",
+        );
+        console.log(
+          "└─────────────────────────────────────────────────────────────┘",
+        );
+        console.log("1) API URL:");
         console.log(`   ${previewUrl}`);
-        console.log('\n2) Request Headers:');
+        console.log("\n2) Request Headers:");
         console.log(JSON.stringify(previewHeaders, null, 2));
-        console.log('\n3) Request Body:');
+        console.log("\n3) Request Body:");
         console.log(JSON.stringify(requestBody, null, 2));
       }
 
       const previewResponse = await this.httpClient.post(
         `/v1/accounts/${request.accountIdKey}/orders/preview`,
         requestBody,
-        { headers: previewHeaders as any }
+        { headers: previewHeaders as any },
       );
 
       if (this.debugHttp) {
-        console.log('\n┌─────────────────────────────────────────────────────────────┐');
-        console.log('│  ORDER PREVIEW RESPONSE                                     │');
-        console.log('└─────────────────────────────────────────────────────────────┘');
-        console.log('4) Response Headers:');
+        console.log(
+          "\n┌─────────────────────────────────────────────────────────────┐",
+        );
+        console.log(
+          "│  ORDER PREVIEW RESPONSE                                     │",
+        );
+        console.log(
+          "└─────────────────────────────────────────────────────────────┘",
+        );
+        console.log("4) Response Headers:");
       }
       const responseHeaders = previewResponse.headers || {};
       if (this.debugHttp) console.log(JSON.stringify(responseHeaders, null, 2));
-      if (responseHeaders['x-et-trace']) {
-        if (this.debugHttp) console.log(`\nX-ET-Trace: ${responseHeaders['x-et-trace']}`);
+      if (responseHeaders["x-et-trace"]) {
+        if (this.debugHttp)
+          console.log(`\nX-ET-Trace: ${responseHeaders["x-et-trace"]}`);
       }
       if (this.debugHttp) {
-        console.log('\n5) Response Body:');
+        console.log("\n5) Response Body:");
         console.log(JSON.stringify(previewResponse.data, null, 2));
       }
+
+      this.throwIfETradeXmlError(previewResponse.data);
 
       return previewResponse.data.PreviewOrderResponse;
     } catch (error: any) {
       if (this.debugHttp) {
-        console.log('\n┌─────────────────────────────────────────────────────────────┐');
-        console.log('│  ORDER PREVIEW ERROR                                        │');
-        console.log('└─────────────────────────────────────────────────────────────┘');
-        console.log('1) API URL:');
+        console.log(
+          "\n┌─────────────────────────────────────────────────────────────┐",
+        );
+        console.log(
+          "│  ORDER PREVIEW ERROR                                        │",
+        );
+        console.log(
+          "└─────────────────────────────────────────────────────────────┘",
+        );
+        console.log("1) API URL:");
         console.log(`   ${previewUrl}`);
-        console.log('\n2) Request Headers:');
+        console.log("\n2) Request Headers:");
         console.log(JSON.stringify(previewHeaders, null, 2));
-        console.log('\n3) Request Body:');
-        console.log(JSON.stringify({ PreviewOrderRequest: orderPayload }, null, 2));
+        console.log("\n3) Request Body:");
+        console.log(
+          JSON.stringify({ PreviewOrderRequest: orderPayload }, null, 2),
+        );
       }
 
       if (error.response) {
         if (this.debugHttp) {
-          console.log('\n4) Response Status:', error.response.status);
-          console.log('5) Response Headers:');
+          console.log("\n4) Response Status:", error.response.status);
+          console.log("5) Response Headers:");
         }
         const errorResponseHeaders = error.response.headers || {};
-        if (this.debugHttp) console.log(JSON.stringify(errorResponseHeaders, null, 2));
-        if (errorResponseHeaders['x-et-trace']) {
-          if (this.debugHttp) console.log(`\nX-ET-Trace: ${errorResponseHeaders['x-et-trace']}`);
+        if (this.debugHttp)
+          console.log(JSON.stringify(errorResponseHeaders, null, 2));
+        if (errorResponseHeaders["x-et-trace"]) {
+          if (this.debugHttp)
+            console.log(`\nX-ET-Trace: ${errorResponseHeaders["x-et-trace"]}`);
         }
         if (this.debugHttp) {
-          console.log('\n6) Response Body:');
+          console.log("\n6) Response Body:");
           console.log(JSON.stringify(error.response.data, null, 2));
         }
       } else {
-        if (this.debugHttp) console.log('\n4) Error (no response):', error.message);
+        if (this.debugHttp)
+          console.log("\n4) Error (no response):", error.message);
       }
 
       throw error;
@@ -222,17 +327,17 @@ export class ETradeClient {
   async placeOrder(request: ETradeOrderRequest): Promise<ETradeOrderResponse> {
     // Step 1: Preview the order
     const previewUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/preview`;
-    console.log('Calling preview URL:', previewUrl);
-    const previewHeaders = this.getAuthHeader(previewUrl, 'POST');
+    console.log("Calling preview URL:", previewUrl);
+    const previewHeaders = this.getAuthHeader(previewUrl, "POST");
 
     // Build order details, only including optional price fields when they have values
-    const securityType = request.securityType || 'EQ'; // Default to EQ for backward compatibility
+    const securityType = request.securityType || "EQ"; // Default to EQ for backward compatibility
     // E*TRADE doc: OPTN Product = symbol + callPut + expiry (int) + strikePrice; or productId (osiKey from option chain).
     // When productId is provided (from Get Option Chains osiKey), use it per Product definition.
     const optnProduct: Record<string, any> =
-      securityType === 'OPTN'
+      securityType === "OPTN"
         ? {
-            securityType: 'OPTN',
+            securityType: "OPTN",
             symbol: request.symbol,
             ...(request.productId && { productId: request.productId }),
             ...(request.callPut && { callPut: request.callPut }),
@@ -240,7 +345,9 @@ export class ETradeClient {
               expiryYear: request.expiryYear,
               expiryMonth: request.expiryMonth,
               expiryDay: request.expiryDay,
-              ...(request.strikePrice != null && { strikePrice: request.strikePrice }),
+              ...(request.strikePrice != null && {
+                strikePrice: request.strikePrice,
+              }),
             }),
           }
         : { securityType, symbol: request.symbol };
@@ -248,19 +355,26 @@ export class ETradeClient {
       allOrNone: request.allOrNone || false,
       priceType: request.priceType,
       orderTerm: request.orderTerm,
-      marketSession: request.marketSession,
+      marketSession:
+        request.priceType === "MARKET" || securityType === "OPTN"
+          ? "REGULAR"
+          : request.marketSession,
       Instrument: [
         {
           Product: optnProduct,
           orderAction: request.orderAction,
-          quantityType: 'QUANTITY',
+          quantityType: "QUANTITY",
           quantity: request.quantity,
         },
       ],
     };
 
     // Only include price fields if they have values (E*TRADE API is sensitive to undefined/null values)
-    if (request.limitPrice !== undefined && request.limitPrice !== null) {
+    if (
+      request.priceType !== "MARKET" &&
+      request.limitPrice !== undefined &&
+      request.limitPrice !== null
+    ) {
       orderDetails.limitPrice = request.limitPrice;
     }
     if (request.stopPrice !== undefined && request.stopPrice !== null) {
@@ -276,66 +390,97 @@ export class ETradeClient {
     let previewResponse;
     try {
       const requestBody = { PreviewOrderRequest: orderPayload };
-      console.log('\n┌─────────────────────────────────────────────────────────────┐');
-      console.log('│  ORDER PREVIEW REQUEST                                      │');
-      console.log('└─────────────────────────────────────────────────────────────┘');
-      console.log('1) API URL:');
+      console.log(
+        "\n┌─────────────────────────────────────────────────────────────┐",
+      );
+      console.log(
+        "│  ORDER PREVIEW REQUEST                                      │",
+      );
+      console.log(
+        "└─────────────────────────────────────────────────────────────┘",
+      );
+      console.log("1) API URL:");
       console.log(`   ${previewUrl}`);
-      console.log('\n2) Request Headers:');
+      console.log("\n2) Request Headers:");
       console.log(JSON.stringify(previewHeaders, null, 2));
-      console.log('\n3) Request Body:');
+      console.log("\n3) Request Body:");
       console.log(JSON.stringify(requestBody, null, 2));
-      
+
       previewResponse = await this.httpClient.post(
         `/v1/accounts/${request.accountIdKey}/orders/preview`,
         requestBody,
-        { headers: previewHeaders as any }
+        { headers: previewHeaders as any },
       );
-      
-      console.log('\n┌─────────────────────────────────────────────────────────────┐');
-      console.log('│  ORDER PREVIEW RESPONSE                                     │');
-      console.log('└─────────────────────────────────────────────────────────────┘');
-      console.log('4) Response Headers:');
+
+      console.log(
+        "\n┌─────────────────────────────────────────────────────────────┐",
+      );
+      console.log(
+        "│  ORDER PREVIEW RESPONSE                                     │",
+      );
+      console.log(
+        "└─────────────────────────────────────────────────────────────┘",
+      );
+      console.log("4) Response Headers:");
       const responseHeaders = previewResponse.headers || {};
       console.log(JSON.stringify(responseHeaders, null, 2));
-      if (responseHeaders['x-et-trace']) {
-        console.log(`\nX-ET-Trace: ${responseHeaders['x-et-trace']}`);
+      if (responseHeaders["x-et-trace"]) {
+        console.log(`\nX-ET-Trace: ${responseHeaders["x-et-trace"]}`);
       }
-      console.log('\n5) Response Body:');
+      console.log("\n5) Response Body:");
       console.log(JSON.stringify(previewResponse.data, null, 2));
     } catch (error: any) {
-      console.log('\n┌─────────────────────────────────────────────────────────────┐');
-      console.log('│  ORDER PREVIEW ERROR                                        │');
-      console.log('└─────────────────────────────────────────────────────────────┘');
-      console.log('1) API URL:');
+      console.log(
+        "\n┌─────────────────────────────────────────────────────────────┐",
+      );
+      console.log(
+        "│  ORDER PREVIEW ERROR                                        │",
+      );
+      console.log(
+        "└─────────────────────────────────────────────────────────────┘",
+      );
+      console.log("1) API URL:");
       console.log(`   ${previewUrl}`);
-      console.log('\n2) Request Headers:');
+      console.log("\n2) Request Headers:");
       console.log(JSON.stringify(previewHeaders, null, 2));
-      console.log('\n3) Request Body:');
-      console.log(JSON.stringify({ PreviewOrderRequest: orderPayload }, null, 2));
-      
+      console.log("\n3) Request Body:");
+      console.log(
+        JSON.stringify({ PreviewOrderRequest: orderPayload }, null, 2),
+      );
+
       if (error.response) {
-        console.log('\n4) Response Status:', error.response.status);
-        console.log('5) Response Headers:');
+        console.log("\n4) Response Status:", error.response.status);
+        console.log("5) Response Headers:");
         const errorResponseHeaders = error.response.headers || {};
         console.log(JSON.stringify(errorResponseHeaders, null, 2));
-        if (errorResponseHeaders['x-et-trace']) {
-          console.log(`\nX-ET-Trace: ${errorResponseHeaders['x-et-trace']}`);
+        if (errorResponseHeaders["x-et-trace"]) {
+          console.log(`\nX-ET-Trace: ${errorResponseHeaders["x-et-trace"]}`);
         }
-        console.log('\n6) Response Body:');
+        console.log("\n6) Response Body:");
         console.log(JSON.stringify(error.response.data, null, 2));
       } else {
-        console.log('\n4) Error (no response):', error.message);
+        console.log("\n4) Error (no response):", error.message);
       }
       throw error;
     }
 
-    const previewId = previewResponse.data.PreviewOrderResponse.PreviewIds[0].previewId;
+    this.throwIfETradeXmlError(previewResponse.data);
+
+    if (
+      !previewResponse.data?.PreviewOrderResponse?.PreviewIds?.[0]?.previewId
+    ) {
+      throw new Error(
+        "Order preview failed: E*TRADE response missing PreviewIds",
+      );
+    }
+
+    const previewId =
+      previewResponse.data.PreviewOrderResponse.PreviewIds[0].previewId;
     console.log(`✓ Order preview successful, previewId: ${previewId}`);
 
     // Step 2: Place the order with previewId
     const placeUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/place`;
-    const placeHeaders = this.getAuthHeader(placeUrl, 'POST');
+    const placeHeaders = this.getAuthHeader(placeUrl, "POST");
 
     const placePayload = {
       PlaceOrderRequest: {
@@ -346,16 +491,19 @@ export class ETradeClient {
 
     let placeResponse;
     try {
-      console.log('Place payload:', JSON.stringify(placePayload, null, 2));
+      console.log("Place payload:", JSON.stringify(placePayload, null, 2));
       placeResponse = await this.httpClient.post(
         `/v1/accounts/${request.accountIdKey}/orders/place`,
         placePayload,
-        { headers: placeHeaders as any }
+        { headers: placeHeaders as any },
       );
     } catch (error: any) {
-      console.error('Place error:', error.response?.status);
-      console.error('Place error data:', JSON.stringify(error.response?.data, null, 2));
-      console.error('Place error message:', error.message);
+      console.error("Place error:", error.response?.status);
+      console.error(
+        "Place error data:",
+        JSON.stringify(error.response?.data, null, 2),
+      );
+      console.error("Place error message:", error.message);
       throw error;
     }
 
@@ -366,31 +514,38 @@ export class ETradeClient {
    * Attempts to place an order directly without preview (experimental).
    * E*TRADE API typically requires preview first, but this method tests if direct placement works.
    */
-  async placeOrderDirect(request: ETradeOrderRequest): Promise<ETradeOrderResponse> {
+  async placeOrderDirect(
+    request: ETradeOrderRequest,
+  ): Promise<ETradeOrderResponse> {
     const placeUrl = `${this.baseUrl}/v1/accounts/${request.accountIdKey}/orders/place`;
-    const placeHeaders = this.getAuthHeader(placeUrl, 'POST');
+    const placeHeaders = this.getAuthHeader(placeUrl, "POST");
 
-    const securityType = request.securityType || 'EQ';
+    const securityType = request.securityType || "EQ";
     const orderDetails: Record<string, any> = {
       allOrNone: request.allOrNone || false,
       priceType: request.priceType,
       orderTerm: request.orderTerm,
-      marketSession: request.marketSession,
+      marketSession:
+        request.priceType === "MARKET" || securityType === "OPTN"
+          ? "REGULAR"
+          : request.marketSession,
       Instrument: [
         {
           Product: {
             securityType: securityType,
             symbol: request.symbol,
-            ...(securityType === 'OPTN' && request.callPut && { callPut: request.callPut }),
-            ...(securityType === 'OPTN' && request.expiryYear != null && {
-              expiryYear: request.expiryYear,
-              expiryMonth: request.expiryMonth,
-              expiryDay: request.expiryDay,
-              strikePrice: request.strikePrice,
-            }),
+            ...(securityType === "OPTN" &&
+              request.callPut && { callPut: request.callPut }),
+            ...(securityType === "OPTN" &&
+              request.expiryYear != null && {
+                expiryYear: request.expiryYear,
+                expiryMonth: request.expiryMonth,
+                expiryDay: request.expiryDay,
+                strikePrice: request.strikePrice,
+              }),
           },
           orderAction: request.orderAction,
-          quantityType: 'QUANTITY',
+          quantityType: "QUANTITY",
           quantity: request.quantity,
         },
       ],
@@ -412,65 +567,86 @@ export class ETradeClient {
       },
     };
 
-    console.log('\n┌─────────────────────────────────────────────────────────────┐');
-    console.log('│  DIRECT ORDER PLACEMENT (NO PREVIEW)                        │');
-    console.log('└─────────────────────────────────────────────────────────────┘');
-    console.log('1) API URL:');
+    console.log(
+      "\n┌─────────────────────────────────────────────────────────────┐",
+    );
+    console.log(
+      "│  DIRECT ORDER PLACEMENT (NO PREVIEW)                        │",
+    );
+    console.log(
+      "└─────────────────────────────────────────────────────────────┘",
+    );
+    console.log("1) API URL:");
     console.log(`   ${placeUrl}`);
-    console.log('\n2) Request Headers:');
+    console.log("\n2) Request Headers:");
     console.log(JSON.stringify(placeHeaders, null, 2));
-    console.log('\n3) Request Body:');
+    console.log("\n3) Request Body:");
     console.log(JSON.stringify(placePayload, null, 2));
 
     try {
       const placeResponse = await this.httpClient.post(
         `/v1/accounts/${request.accountIdKey}/orders/place`,
         placePayload,
-        { headers: placeHeaders as any }
+        { headers: placeHeaders as any },
       );
 
-      console.log('\n┌─────────────────────────────────────────────────────────────┐');
-      console.log('│  DIRECT ORDER PLACEMENT RESPONSE                           │');
-      console.log('└─────────────────────────────────────────────────────────────┘');
-      console.log('4) Response Headers:');
+      console.log(
+        "\n┌─────────────────────────────────────────────────────────────┐",
+      );
+      console.log(
+        "│  DIRECT ORDER PLACEMENT RESPONSE                           │",
+      );
+      console.log(
+        "└─────────────────────────────────────────────────────────────┘",
+      );
+      console.log("4) Response Headers:");
       const responseHeaders = placeResponse.headers || {};
       console.log(JSON.stringify(responseHeaders, null, 2));
-      if (responseHeaders['x-et-trace']) {
-        console.log(`\nX-ET-Trace: ${responseHeaders['x-et-trace']}`);
+      if (responseHeaders["x-et-trace"]) {
+        console.log(`\nX-ET-Trace: ${responseHeaders["x-et-trace"]}`);
       }
-      console.log('\n5) Response Body:');
+      console.log("\n5) Response Body:");
       console.log(JSON.stringify(placeResponse.data, null, 2));
 
       return placeResponse.data.PlaceOrderResponse;
     } catch (error: any) {
-      console.log('\n┌─────────────────────────────────────────────────────────────┐');
-      console.log('│  DIRECT ORDER PLACEMENT ERROR                              │');
-      console.log('└─────────────────────────────────────────────────────────────┘');
-      
+      console.log(
+        "\n┌─────────────────────────────────────────────────────────────┐",
+      );
+      console.log(
+        "│  DIRECT ORDER PLACEMENT ERROR                              │",
+      );
+      console.log(
+        "└─────────────────────────────────────────────────────────────┘",
+      );
+
       if (error.response) {
-        console.log('4) Response Status:', error.response.status);
-        console.log('5) Response Headers:');
+        console.log("4) Response Status:", error.response.status);
+        console.log("5) Response Headers:");
         const errorResponseHeaders = error.response.headers || {};
         console.log(JSON.stringify(errorResponseHeaders, null, 2));
-        if (errorResponseHeaders['x-et-trace']) {
-          console.log(`\nX-ET-Trace: ${errorResponseHeaders['x-et-trace']}`);
+        if (errorResponseHeaders["x-et-trace"]) {
+          console.log(`\nX-ET-Trace: ${errorResponseHeaders["x-et-trace"]}`);
         }
-        console.log('\n6) Response Body:');
+        console.log("\n6) Response Body:");
         console.log(JSON.stringify(error.response.data, null, 2));
       } else {
-        console.log('4) Error (no response):', error.message);
+        console.log("4) Error (no response):", error.message);
       }
       throw error;
     }
   }
 
-  async getOrderStatus(accountIdKey: string, orderId: string): Promise<ETradeOrderResponse> {
+  async getOrderStatus(
+    accountIdKey: string,
+    orderId: string,
+  ): Promise<ETradeOrderResponse> {
     const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/orders/${orderId}`;
     const headers = this.getAuthHeader(url);
 
     const response = await this.httpClient.get(
       `/v1/accounts/${accountIdKey}/orders/${orderId}`,
-      { headers: headers as any }
+      { headers: headers as any },
     );
 
     return response.data.OrdersResponse.Order[0];
@@ -480,14 +656,20 @@ export class ETradeClient {
    * List orders for an account (defaults to OPEN).
    * E*TRADE Order API: GET /v1/accounts/{accountIdKey}/orders?status=OPEN
    */
-  async listOrders(accountIdKey: string, status: string = 'OPEN'): Promise<any[]> {
+  async listOrders(
+    accountIdKey: string,
+    status: string = "OPEN",
+  ): Promise<any[]> {
     const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/orders?status=${encodeURIComponent(status)}`;
     const headers = this.getAuthHeader(url);
     const response = await this.httpClient.get(
       `/v1/accounts/${accountIdKey}/orders?status=${encodeURIComponent(status)}`,
-      { headers: headers as any }
+      { headers: headers as any },
     );
-    const orders = response.data?.OrdersResponse?.Order ?? response.data?.ordersResponse?.order ?? [];
+    const orders =
+      response.data?.OrdersResponse?.Order ??
+      response.data?.ordersResponse?.order ??
+      [];
     return Array.isArray(orders) ? orders : [orders];
   }
 
@@ -498,18 +680,25 @@ export class ETradeClient {
   async getPortfolio(accountIdKey: string): Promise<any> {
     const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/portfolio`;
     const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(`/v1/accounts/${accountIdKey}/portfolio`, { headers: headers as any });
-    return response.data?.PortfolioResponse ?? response.data?.portfolioResponse ?? response.data;
+    const response = await this.httpClient.get(
+      `/v1/accounts/${accountIdKey}/portfolio`,
+      { headers: headers as any },
+    );
+    return (
+      response.data?.PortfolioResponse ??
+      response.data?.portfolioResponse ??
+      response.data
+    );
   }
 
   async cancelOrder(accountIdKey: string, orderId: string): Promise<void> {
     const url = `${this.baseUrl}/v1/accounts/${accountIdKey}/orders/cancel`;
-    const headers = this.getAuthHeader(url, 'PUT');
+    const headers = this.getAuthHeader(url, "PUT");
 
     await this.httpClient.put(
       `/v1/accounts/${accountIdKey}/orders/cancel`,
       { CancelOrderRequest: { orderId } },
-      { headers: headers as any }
+      { headers: headers as any },
     );
   }
 
@@ -520,7 +709,7 @@ export class ETradeClient {
    * **Important:** E*TRADE's API returns the wrong structure: market data is
    * nested inside an `All` object instead of at top level. Always read via
    * quote.All ?? quote. The actual market data fields are inside `All`:
-   * 
+   *
    * ```typescript
    * {
    *   dateTime: "...",
@@ -542,7 +731,7 @@ export class ETradeClient {
    *   }
    * }
    * ```
-   * 
+   *
    * When using this method, access market data via `quote.All`:
    * ```typescript
    * const quotes = await client.getQuote(['AMZN']);
@@ -551,17 +740,20 @@ export class ETradeClient {
    * const ask = quoteData.ask;
    * const lastPrice = quoteData.lastTrade || quoteData.previousClose;
    * ```
-   * 
+   *
    * @param symbols Array of symbol strings (e.g., ['AAPL', 'MSFT'])
    * @returns Array of quote objects (raw API response structure)
    */
   async getQuote(symbols: string[]): Promise<ETradeQuote[]> {
-    const url = `${this.baseUrl}/v1/market/quote/${symbols.join(',')}`;
+    const url = `${this.baseUrl}/v1/market/quote/${symbols.join(",")}`;
     const headers = this.getAuthHeader(url);
 
-    const response = await this.httpClient.get(`/v1/market/quote/${symbols.join(',')}`, {
-      headers: headers as any,
-    });
+    const response = await this.httpClient.get(
+      `/v1/market/quote/${symbols.join(",")}`,
+      {
+        headers: headers as any,
+      },
+    );
 
     return response.data.QuoteResponse.QuoteData;
   }
@@ -578,9 +770,12 @@ export class ETradeClient {
     const headers = this.getAuthHeader(url);
 
     try {
-      const response = await this.httpClient.get(`/v1/market/lookup/${encoded}`, {
-        headers: headers as any,
-      });
+      const response = await this.httpClient.get(
+        `/v1/market/lookup/${encoded}`,
+        {
+          headers: headers as any,
+        },
+      );
 
       const wrapper =
         response.data?.LookupResponse ??
@@ -597,13 +792,13 @@ export class ETradeClient {
       }
       const msg =
         body?.message ?? body?.ErrorMessage ?? body?.error ?? err.message;
-      throw new Error(msg || 'Symbol lookup failed');
+      throw new Error(msg || "Symbol lookup failed");
     }
   }
 
   async getOptionsChain(
     symbol: string,
-    expirationDate?: string
+    expirationDate?: string,
   ): Promise<OptionsChain> {
     let url = `${this.baseUrl}/v1/market/optionchains?symbol=${symbol}`;
     if (expirationDate) {
@@ -611,7 +806,9 @@ export class ETradeClient {
     }
 
     const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers: headers as any });
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ""), {
+      headers: headers as any,
+    });
 
     const chainData = response.data.OptionChainResponse;
 
@@ -620,9 +817,18 @@ export class ETradeClient {
       symbol,
       underlyingPrice: chainData.SelectedED?.UnderlyingPrice || 0,
       expirationDates: chainData.ExpirationDate || [],
-      strikes: chainData.OptionPair?.map((pair: any) => pair.Call?.strikePrice || pair.Put?.strikePrice) || [],
-      calls: chainData.OptionPair?.map((pair: any) => this.transformOptionContract(pair.Call, 'CALL')).filter(Boolean) || [],
-      puts: chainData.OptionPair?.map((pair: any) => this.transformOptionContract(pair.Put, 'PUT')).filter(Boolean) || [],
+      strikes:
+        chainData.OptionPair?.map(
+          (pair: any) => pair.Call?.strikePrice || pair.Put?.strikePrice,
+        ) || [],
+      calls:
+        chainData.OptionPair?.map((pair: any) =>
+          this.transformOptionContract(pair.Call, "CALL"),
+        ).filter(Boolean) || [],
+      puts:
+        chainData.OptionPair?.map((pair: any) =>
+          this.transformOptionContract(pair.Put, "PUT"),
+        ).filter(Boolean) || [],
     };
   }
 
@@ -630,11 +836,17 @@ export class ETradeClient {
    * Get valid option expiry dates for a symbol (per E*TRADE Market API).
    * Returns array of { year, month, day } sorted by date.
    */
-  async getOptionExpireDates(symbol: string): Promise<{ year: number; month: number; day: number }[]> {
+  async getOptionExpireDates(
+    symbol: string,
+  ): Promise<{ year: number; month: number; day: number }[]> {
     const url = `${this.baseUrl}/v1/market/optionexpiredate?symbol=${symbol}`;
     const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers: headers as any });
-    const data = response.data?.OptionExpireDateResponse || response.data?.optionExpireDateResponse;
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ""), {
+      headers: headers as any,
+    });
+    const data =
+      response.data?.OptionExpireDateResponse ||
+      response.data?.optionExpireDateResponse;
     const dates = data?.ExpirationDate ?? data?.expirationDates ?? [];
     const list = Array.isArray(dates) ? dates : [dates];
     return list
@@ -660,45 +872,78 @@ export class ETradeClient {
     symbol: string,
     expiryYear: number,
     expiryMonth: number,
-    expiryDay: number
-  ): Promise<Array<{
-    strikePrice: number;
-    call?: { osiKey: string; openInterest: number; bid: number; ask: number; volume: number };
-    put?: { osiKey: string; openInterest: number; bid: number; ask: number; volume: number };
-  }>> {
+    expiryDay: number,
+  ): Promise<
+    Array<{
+      strikePrice: number;
+      call?: {
+        osiKey: string;
+        openInterest: number;
+        bid: number;
+        ask: number;
+        volume: number;
+      };
+      put?: {
+        osiKey: string;
+        openInterest: number;
+        bid: number;
+        ask: number;
+        volume: number;
+      };
+    }>
+  > {
     // First get current stock price to center strikes around it
     const quotes = await this.getQuote([symbol]);
-    const currentPrice = quotes[0]?.last ?? quotes[0]?.close ?? 0;
-    
-    const monthStr = String(expiryMonth).padStart(2, '0');
+    const quoteData = (quotes[0]?.All ?? quotes[0]) as
+      | ETradeQuoteAll
+      | undefined;
+    const currentPrice = quoteData?.lastTrade ?? quoteData?.previousClose ?? 0;
+
+    const monthStr = String(expiryMonth).padStart(2, "0");
     // Use strikePriceNear to center around current price, and increase noOfStrikes to get more range
     const url = `${this.baseUrl}/v1/market/optionchains?symbol=${symbol}&expiryYear=${expiryYear}&expiryMonth=${monthStr}&expiryDay=${expiryDay}&strikePriceNear=${Math.round(currentPrice)}&noOfStrikes=100`;
     const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers: headers as any });
-    const chain = response.data?.OptionChainResponse || response.data?.optionChainResponse;
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ""), {
+      headers: headers as any,
+    });
+    const chain =
+      response.data?.OptionChainResponse || response.data?.optionChainResponse;
     const pairs = chain?.OptionPair || chain?.optionPairs || [];
-    return pairs.map((pair: any) => {
-      const call = pair.Call || pair.call;
-      const put = pair.Put || pair.put;
-      const strike = call?.strikePrice ?? put?.strikePrice ?? call?.StrikePrice ?? put?.StrikePrice;
-      return {
-        strikePrice: Number(strike),
-        call: call ? {
-          osiKey: call.osiKey ?? call.OsiKey ?? '',
-          openInterest: Number(call.openInterest ?? call.OpenInterest ?? 0),
-          bid: Number(call.bid ?? call.Bid ?? 0),
-          ask: Number(call.ask ?? call.Ask ?? 0),
-          volume: Number(call.volume ?? call.Volume ?? 0),
-        } : undefined,
-        put: put ? {
-          osiKey: put.osiKey ?? put.OsiKey ?? '',
-          openInterest: Number(put.openInterest ?? put.OpenInterest ?? 0),
-          bid: Number(put.bid ?? put.Bid ?? 0),
-          ask: Number(put.ask ?? put.Ask ?? 0),
-          volume: Number(put.volume ?? put.Volume ?? 0),
-        } : undefined,
-      };
-    }).filter((p: any) => !isNaN(p.strikePrice)).sort((a: any, b: any) => a.strikePrice - b.strikePrice);
+    return pairs
+      .map((pair: any) => {
+        const call = pair.Call || pair.call;
+        const put = pair.Put || pair.put;
+        const strike =
+          call?.strikePrice ??
+          put?.strikePrice ??
+          call?.StrikePrice ??
+          put?.StrikePrice;
+        return {
+          strikePrice: Number(strike),
+          call: call
+            ? {
+                osiKey: call.osiKey ?? call.OsiKey ?? "",
+                openInterest: Number(
+                  call.openInterest ?? call.OpenInterest ?? 0,
+                ),
+                bid: Number(call.bid ?? call.Bid ?? 0),
+                ask: Number(call.ask ?? call.Ask ?? 0),
+                volume: Number(call.volume ?? call.Volume ?? 0),
+              }
+            : undefined,
+          put: put
+            ? {
+                osiKey: put.osiKey ?? put.OsiKey ?? "",
+                openInterest: Number(put.openInterest ?? put.OpenInterest ?? 0),
+                bid: Number(put.bid ?? put.Bid ?? 0),
+                ask: Number(put.ask ?? put.Ask ?? 0),
+                volume: Number(put.volume ?? put.Volume ?? 0),
+              }
+            : undefined,
+        };
+      })
+      .filter((p: any) => !isNaN(p.strikePrice))
+      .sort((a: any, b: any) => a.strikePrice - b.strikePrice);
   }
 
   /**
@@ -710,40 +955,70 @@ export class ETradeClient {
     expiryYear: number,
     expiryMonth: number,
     expiryDay: number,
-    strikePriceNear: number
-  ): Promise<Array<{
-    strikePrice: number;
-    call?: { osiKey: string; openInterest: number; bid: number; ask: number; volume: number };
-    put?: { osiKey: string; openInterest: number; bid: number; ask: number; volume: number };
-  }>> {
-    const monthStr = String(expiryMonth).padStart(2, '0');
+    strikePriceNear: number,
+  ): Promise<
+    Array<{
+      strikePrice: number;
+      call?: {
+        osiKey: string;
+        openInterest: number;
+        bid: number;
+        ask: number;
+        volume: number;
+      };
+      put?: {
+        osiKey: string;
+        openInterest: number;
+        bid: number;
+        ask: number;
+        volume: number;
+      };
+    }>
+  > {
+    const monthStr = String(expiryMonth).padStart(2, "0");
     const url = `${this.baseUrl}/v1/market/optionchains?symbol=${symbol}&expiryYear=${expiryYear}&expiryMonth=${monthStr}&expiryDay=${expiryDay}&strikePriceNear=${Math.round(strikePriceNear)}&noOfStrikes=100`;
     const headers = this.getAuthHeader(url);
-    const response = await this.httpClient.get(url.replace(this.baseUrl, ''), { headers: headers as any });
-    const chain = response.data?.OptionChainResponse || response.data?.optionChainResponse;
+    const response = await this.httpClient.get(url.replace(this.baseUrl, ""), {
+      headers: headers as any,
+    });
+    const chain =
+      response.data?.OptionChainResponse || response.data?.optionChainResponse;
     const pairs = chain?.OptionPair || chain?.optionPairs || [];
-    return pairs.map((pair: any) => {
-      const call = pair.Call || pair.call;
-      const put = pair.Put || pair.put;
-      const strike = call?.strikePrice ?? put?.strikePrice ?? call?.StrikePrice ?? put?.StrikePrice;
-      return {
-        strikePrice: Number(strike),
-        call: call ? {
-          osiKey: call.osiKey ?? call.OsiKey ?? '',
-          openInterest: Number(call.openInterest ?? call.OpenInterest ?? 0),
-          bid: Number(call.bid ?? call.Bid ?? 0),
-          ask: Number(call.ask ?? call.Ask ?? 0),
-          volume: Number(call.volume ?? call.Volume ?? 0),
-        } : undefined,
-        put: put ? {
-          osiKey: put.osiKey ?? put.OsiKey ?? '',
-          openInterest: Number(put.openInterest ?? put.OpenInterest ?? 0),
-          bid: Number(put.bid ?? put.Bid ?? 0),
-          ask: Number(put.ask ?? put.Ask ?? 0),
-          volume: Number(put.volume ?? put.Volume ?? 0),
-        } : undefined,
-      };
-    }).filter((p: any) => !isNaN(p.strikePrice)).sort((a: any, b: any) => a.strikePrice - b.strikePrice);
+    return pairs
+      .map((pair: any) => {
+        const call = pair.Call || pair.call;
+        const put = pair.Put || pair.put;
+        const strike =
+          call?.strikePrice ??
+          put?.strikePrice ??
+          call?.StrikePrice ??
+          put?.StrikePrice;
+        return {
+          strikePrice: Number(strike),
+          call: call
+            ? {
+                osiKey: call.osiKey ?? call.OsiKey ?? "",
+                openInterest: Number(
+                  call.openInterest ?? call.OpenInterest ?? 0,
+                ),
+                bid: Number(call.bid ?? call.Bid ?? 0),
+                ask: Number(call.ask ?? call.Ask ?? 0),
+                volume: Number(call.volume ?? call.Volume ?? 0),
+              }
+            : undefined,
+          put: put
+            ? {
+                osiKey: put.osiKey ?? put.OsiKey ?? "",
+                openInterest: Number(put.openInterest ?? put.OpenInterest ?? 0),
+                bid: Number(put.bid ?? put.Bid ?? 0),
+                ask: Number(put.ask ?? put.Ask ?? 0),
+                volume: Number(put.volume ?? put.Volume ?? 0),
+              }
+            : undefined,
+        };
+      })
+      .filter((p: any) => !isNaN(p.strikePrice))
+      .sort((a: any, b: any) => a.strikePrice - b.strikePrice);
   }
 
   /**
@@ -756,24 +1031,33 @@ export class ETradeClient {
     expiryYear: number,
     expiryMonth: number,
     expiryDay: number,
-    callPut: 'CALL' | 'PUT',
-    strikePrice: number
+    callPut: "CALL" | "PUT",
+    strikePrice: number,
   ): Promise<string | null> {
-    const chain = await this.getOptionChainForExpiry(symbol, expiryYear, expiryMonth, expiryDay);
-    const pair = chain.find((p) => Math.round(p.strikePrice) === Math.round(strikePrice));
+    // Use strike-centered chain lookup so far-OTM strikes are included
+    const chain = await this.getOptionChainForExpiryWithStrikeNear(
+      symbol,
+      expiryYear,
+      expiryMonth,
+      expiryDay,
+      strikePrice,
+    );
+    const pair = chain.find(
+      (p) => Math.abs(p.strikePrice - strikePrice) < 0.01,
+    );
     if (!pair) return null;
-    const leg = callPut === 'CALL' ? pair.call : pair.put;
+    const leg = callPut === "CALL" ? pair.call : pair.put;
     return leg?.osiKey ?? null;
   }
 
-  private transformOptionContract(contract: any, type: 'CALL' | 'PUT'): any {
+  private transformOptionContract(contract: any, type: "CALL" | "PUT"): any {
     if (!contract) return null;
 
     return {
-      symbol: contract.optionSymbol || '',
+      symbol: contract.optionSymbol || "",
       optionType: type,
       strikePrice: contract.strikePrice || 0,
-      expirationDate: contract.expirationDate || '',
+      expirationDate: contract.expirationDate || "",
       bid: contract.bid || 0,
       ask: contract.ask || 0,
       last: contract.lastPrice || 0,

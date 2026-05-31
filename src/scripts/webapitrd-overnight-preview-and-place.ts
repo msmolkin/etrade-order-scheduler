@@ -14,7 +14,7 @@ dotenv.config({ quiet: true });
  * Required env:
  * - ETRADE_WEB_JSESSIONID   (cookie value only, not "JSESSIONID=...")
  * - ETRADE_WEB_STK1         (full stk1 header value)
- * - ETRADE_WEB_ACCOUNT_ID   (website numeric accountId, e.g. "367637280")
+ * - ETRADE_WEB_ACCOUNT_ID   (website numeric accountId, e.g. "YOUR_ACCOUNT_ID")
  *
  * Optional env (defaults match your capture):
  * - ETRADE_WEB_SYMBOL=SLV

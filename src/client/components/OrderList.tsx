@@ -1,650 +1,1200 @@
-import React, { useEffect, useState } from 'react';
+/**
+ * Slice 4.4 OrderList rewrite.
+ *
+ * Replaces the giant filter-tab strip + flat list with:
+ *
+ *   1. <DayStrip /> at the top - 56px timeline showing today's auth +
+ *      heartbeats + fire windows + close + DB dump. Click a dot to
+ *      scroll the list to that fire's orders.
+ *   2. Three sections: "Firing within 30 minutes" (amber pulsing),
+ *      "Today", "Future". Each shows a count next to the section title.
+ *   3. Rows render as <OrderThread /> when the order has lineage children,
+ *      or <OrderRow /> when standalone. Both share the same row grid.
+ *   4. Filter chips (PAUSED / REJECTED / COMPLETE / DELETED) move to a
+ *      compact dropdown menu on the right of the page header. The default
+ *      view is the three time-tier sections.
+ *   5. Virtualization kicks in when the visible row count exceeds 100
+ *      via @tanstack/react-virtual. Section headers stay outside the
+ *      virtual viewport so they never disappear during scroll.
+ *
+ * Mutation handlers (submit / pause / resume / modify / delete / retry)
+ * still come from Slice 3.3 useOrderMutations. Actions stay optimistic;
+ * we toast on success/error like the previous version did.
+ */
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { cancelBrokerOrder, type Order } from "../utils/api";
+import { useOrders } from "../hooks/useOrders";
+import { useDeletedOrders } from "../hooks/useDeletedOrders";
+import { useDayStripEvents } from "../hooks/useDayStripEvents";
+import { useWS } from "../hooks/WSProvider";
 import {
-  fetchOrders, deleteOrder, submitOrder, updateOrderQuantity, updateOrderLimitPrice,
-  fetchDeletedOrders, restoreOrder, permanentlyDeleteOrder,
-  pauseAllOrders, resumeAllOrders, pauseOrder, resumeOrder,
-  type Order,
-} from '../utils/api';
-import { useWebSocket } from '../hooks/useWebSocket';
+  useDeleteOrder,
+  usePauseAllOrders,
+  usePauseOrder,
+  usePermanentlyDeleteOrder,
+  useRestoreOrder,
+  useResumeAllOrders,
+  useResumeOrder,
+  useSubmitOrder,
+  useUpdateOrderLimitPrice,
+  useUpdateOrderOnlyFillOnce,
+  useUpdateOrderQuantity,
+} from "../hooks/useOrderMutations";
+import DayStrip from "./DayStrip";
+import AuthFix from "./AuthFix";
+import { useAuthStatus } from "../hooks/useAuthStatus";
+import OrderRow, { type RowTier } from "./OrderRow";
+import OrderThread from "./OrderThread";
 
-type Toast = { id: number; message: string; type: 'success' | 'error' };
-type ConfirmAction = {
-  orderId: string;
-  type: 'delete' | 'submit' | 'permanent-delete';
-  label: string;
-  anchor: { top: number; left: number; height: number };
-};
-
-type FilterTab = 'all' | 'scheduled' | 'paused' | 'pending' | 'submitted' | 'failed' | 'complete' | 'deleted';
+type Toast = { id: number; message: string; type: "success" | "error" };
+type SecondaryFilter =
+  | "all"
+  | "active"
+  | "paused"
+  | "rejected"
+  | "complete"
+  | "deleted";
 
 let toastId = 0;
 
-export default function OrderList() {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [deletedOrders, setDeletedOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [submittingId, setSubmittingId] = useState<string | null>(null);
-  const [modifyingId, setModifyingId] = useState<string | null>(null);
-  const [modifyQuantity, setModifyQuantity] = useState<number>(1);
-  const [modifyPrice, setModifyPrice] = useState<string>('');
-  const [modifyingSaving, setModifyingSaving] = useState(false);
-  const [filter, setFilter] = useState<FilterTab>('all');
-  const { isConnected, lastMessage } = useWebSocket('ws://localhost:3001/ws');
-  const [toasts, setToasts] = useState<Toast[]>([]);
-  const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+const IMMINENT_MS = 30 * 60_000;
+const VIRTUALIZE_THRESHOLD = 100;
+const ROW_ESTIMATE_PX = 64; // OrderRow + lineage bar averages here for OrderThread.
 
-  const showToast = (message: string, type: 'success' | 'error') => {
+interface ListItem {
+  /** Section heading; tier carries the styling. */
+  kind: "header";
+  id: string;
+  title: string;
+  count: number;
+  tier: RowTier;
+}
+
+interface RowItem {
+  kind: "row";
+  id: string;
+  order: Order;
+  tier: RowTier;
+  isThread: boolean;
+}
+
+type FlatItem = ListItem | RowItem;
+
+const dayKeyFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function classifyTier(order: Order, now: number): RowTier {
+  // Imminent rule: scheduled within 30 min ahead OR submitted/pending right now.
+  if (order.status === "SUBMITTED") return "imminent";
+  if (!order.scheduledFor) return "today";
+  const at = new Date(order.scheduledFor).getTime();
+  const delta = at - now;
+  if (delta <= IMMINENT_MS && delta >= -IMMINENT_MS / 2) return "imminent";
+  // Same calendar day in ET = today.
+  const dayKey = (ms: number) => dayKeyFormatter.format(new Date(ms));
+  if (dayKey(at) === dayKey(now)) return "today";
+  return "future";
+}
+
+function isActiveOrder(order: Order): boolean {
+  return ["PENDING", "SCHEDULED", "SUBMITTED"].includes(order.status);
+}
+
+export default function OrderList() {
+  const {
+    data: orders = [],
+    isLoading: ordersLoading,
+    refetch: refetchOrders,
+  } = useOrders();
+  const { data: deletedOrders = [], refetch: refetchDeleted } =
+    useDeletedOrders();
+  const { isConnected } = useWS();
+  const events = useDayStripEvents();
+  const { status: authStatus } = useAuthStatus();
+  const authBroken = authStatus !== null && authStatus.authenticated === false;
+
+  const [secondaryFilter, setSecondaryFilter] =
+    useState<SecondaryFilter>("all");
+  const [filterMenuOpen, setFilterMenuOpen] = useState<boolean>(false);
+  const [toasts, setToasts] = useState<Toast[]>([]);
+  const [modifyingId, setModifyingId] = useState<string | null>(null);
+
+  // Mutation hooks (Slice 3.3) - one instance per page.
+  const submitMut = useSubmitOrder();
+  const deleteMut = useDeleteOrder();
+  const permanentDeleteMut = usePermanentlyDeleteOrder();
+  const restoreMut = useRestoreOrder();
+  const pauseMut = usePauseOrder();
+  const resumeMut = useResumeOrder();
+  const pauseAllMut = usePauseAllOrders();
+  const resumeAllMut = useResumeAllOrders();
+  // Quantity / price are still wired through the cache; the inline modify
+  // UI moves to a future slice. For now, modify hands off to a window prompt
+  // so the action stays reachable while the row stays compact.
+  const updateQtyMut = useUpdateOrderQuantity();
+  const updatePriceMut = useUpdateOrderLimitPrice();
+  const updateOnlyFillOnceMut = useUpdateOrderOnlyFillOnce();
+  const submittingId = submitMut.isPending
+    ? (submitMut.variables ?? null)
+    : null;
+
+  const showToast = (message: string, type: "success" | "error") => {
     const id = ++toastId;
     setToasts((prev) => [...prev, { id, message, type }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
+    setTimeout(
+      () => setToasts((prev) => prev.filter((t) => t.id !== id)),
+      4000,
+    );
   };
 
-  const loadOrders = async () => {
-    try {
-      setLoading(true);
-      const [data, deleted] = await Promise.all([
-        fetchOrders(),
-        fetchDeletedOrders(),
-      ]);
-      setOrders(data);
-      setDeletedOrders(deleted);
-    } catch (error) {
-      console.error('Failed to load orders:', error);
-    } finally {
-      setLoading(false);
-    }
+  const handleSubmit = (id: string) =>
+    submitMut.mutate(id, {
+      onSuccess: (result) =>
+        result.success
+          ? showToast(
+              `Order submitted - E*TRADE id ${result.order.etradeOrderId ?? "pending"}`,
+              "success",
+            )
+          : showToast(
+              `Submission failed: ${result.order.lastError ?? "unknown error"}`,
+              "error",
+            ),
+      onError: (err) => showToast(`Failed to submit: ${err.message}`, "error"),
+    });
+  const handlePause = (id: string) =>
+    pauseMut.mutate(id, {
+      onSuccess: () => showToast("Order paused", "success"),
+      onError: (err) => showToast(`Failed to pause: ${err.message}`, "error"),
+    });
+  const handleResume = (id: string) =>
+    resumeMut.mutate(id, {
+      onSuccess: () => showToast("Order resumed", "success"),
+      onError: (err) => showToast(`Failed to resume: ${err.message}`, "error"),
+    });
+  const handleDelete = (id: string) =>
+    deleteMut.mutate(id, {
+      onSuccess: () => showToast("Order moved to Deleted", "success"),
+      onError: (err) => showToast(`Failed to delete: ${err.message}`, "error"),
+    });
+  const handleRestore = (id: string) =>
+    restoreMut.mutate(id, {
+      onSuccess: () => showToast("Order restored", "success"),
+      onError: (err) => showToast(`Failed to restore: ${err.message}`, "error"),
+    });
+  const handlePermanentDelete = (id: string) =>
+    permanentDeleteMut.mutate(id, {
+      onSuccess: () => showToast("Order permanently deleted", "success"),
+      onError: (err) =>
+        showToast(`Failed to permanently delete: ${err.message}`, "error"),
+    });
+  const handlePauseAll = () =>
+    pauseAllMut.mutate(undefined, {
+      onSuccess: (r) => showToast(`Paused ${r.paused} order(s)`, "success"),
+      onError: (err) =>
+        showToast(`Failed to pause all: ${err.message}`, "error"),
+    });
+  const handleResumeAll = () =>
+    resumeAllMut.mutate(undefined, {
+      onSuccess: (r) => showToast(`Resumed ${r.resumed} order(s)`, "success"),
+      onError: (err) =>
+        showToast(`Failed to resume all: ${err.message}`, "error"),
+    });
+  const handleToggleOnlyFillOnce = (id: string, next: boolean) =>
+    updateOnlyFillOnceMut.mutate(
+      { orderId: id, onlyFillOnce: next },
+      {
+        onSuccess: () =>
+          showToast(
+            next
+              ? "Will stop rescheduling once filled"
+              : "Will keep rescheduling after fills",
+            "success",
+          ),
+        onError: (err) =>
+          showToast(`Failed to update: ${err.message}`, "error"),
+      },
+    );
+
+  const handleCancelBrokerOrder = (
+    accountIdKey: string,
+    brokerOrderId: string,
+  ) => {
+    const ok = window.confirm(`Cancel E*TRADE open order #${brokerOrderId}?`);
+    if (!ok) return;
+    cancelBrokerOrder(accountIdKey, brokerOrderId)
+      .then(() => {
+        showToast(`Cancelled E*TRADE order #${brokerOrderId}`, "success");
+        refreshAll();
+      })
+      .catch((err: Error) =>
+        showToast(
+          `Failed to cancel #${brokerOrderId}: ${err.message}`,
+          "error",
+        ),
+      );
   };
 
-  useEffect(() => {
-    loadOrders();
-  }, []);
-
-  useEffect(() => {
-    if (lastMessage?.type === 'order_update') {
-      loadOrders();
-    }
-  }, [lastMessage]);
-
-  const handleDelete = async (orderId: string) => {
-    try {
-      await deleteOrder(orderId);
-      setOrders((prev) => prev.map((o) => o.id === orderId ? { ...o, status: 'DELETED' } : o));
-      showToast('Order moved to Deleted', 'success');
-    } catch (error) {
-      console.error('Failed to delete order:', error);
-      showToast('Failed to delete order', 'error');
-    }
-  };
-
-  const handlePermanentDelete = async (orderId: string) => {
-    try {
-      await permanentlyDeleteOrder(orderId);
-      setDeletedOrders((prev) => prev.filter((o) => o.id !== orderId));
-      showToast('Order permanently deleted', 'success');
-    } catch (error) {
-      console.error('Failed to permanently delete order:', error);
-      showToast('Failed to permanently delete', 'error');
-    }
-  };
-
-  const handleRestore = async (orderId: string) => {
-    try {
-      await restoreOrder(orderId);
-      loadOrders();
-      showToast('Order restored', 'success');
-    } catch (error) {
-      console.error('Failed to restore order:', error);
-      showToast('Failed to restore order', 'error');
-    }
-  };
-
-  const handlePauseOrder = async (orderId: string) => {
-    try {
-      await pauseOrder(orderId);
-      loadOrders();
-      showToast('Order paused', 'success');
-    } catch (error) {
-      console.error('Failed to pause order:', error);
-      showToast('Failed to pause order', 'error');
-    }
-  };
-
-  const handleResumeOrder = async (orderId: string) => {
-    try {
-      await resumeOrder(orderId);
-      loadOrders();
-      showToast('Order resumed', 'success');
-    } catch (error) {
-      console.error('Failed to resume order:', error);
-      showToast('Failed to resume order', 'error');
-    }
-  };
-
-  const handlePauseAll = async () => {
-    try {
-      const result = await pauseAllOrders();
-      loadOrders();
-      showToast(`Paused ${result.paused} order(s)`, 'success');
-    } catch (error) {
-      console.error('Failed to pause all:', error);
-      showToast('Failed to pause all orders', 'error');
-    }
-  };
-
-  const handleResumeAll = async () => {
-    try {
-      const result = await resumeAllOrders();
-      loadOrders();
-      showToast(`Resumed ${result.resumed} order(s)`, 'success');
-    } catch (error) {
-      console.error('Failed to resume all:', error);
-      showToast('Failed to resume all orders', 'error');
-    }
-  };
-
-  const handleSubmit = async (orderId: string) => {
-    try {
-      setSubmittingId(orderId);
-      const result = await submitOrder(orderId);
-      if (result.success) {
-        showToast(`Order submitted! E*TRADE ID: ${result.order.etradeOrderId || 'Pending'}`, 'success');
-      } else {
-        showToast(`Submission failed: ${result.order.lastError || 'Unknown error'}`, 'error');
-      }
-      loadOrders();
-    } catch (error: any) {
-      console.error('Failed to submit order:', error);
-      showToast(`Failed to submit: ${error.message}`, 'error');
-    } finally {
-      setSubmittingId(null);
-    }
-  };
-
-  const handleConfirmAction = () => {
-    if (!confirmAction) return;
-    if (confirmAction.type === 'delete') handleDelete(confirmAction.orderId);
-    else if (confirmAction.type === 'permanent-delete') handlePermanentDelete(confirmAction.orderId);
-    else handleSubmit(confirmAction.orderId);
-    setConfirmAction(null);
-  };
-
-  const handleStartModify = (order: Order) => {
+  // Modify: open an in-place edit cell on the row. Slice 5 polish replaces
+  // the previous window.prompt path. The cell itself owns the inputs and
+  // calls back into these mutation hooks on Save (or ↵).
+  const handleModify = (order: Order) => {
     setModifyingId(order.id);
-    setModifyQuantity(order.quantity);
-    setModifyPrice(order.limitPrice != null ? String(order.limitPrice) : '');
   };
 
-  const handleCancelModify = () => {
-    setModifyingId(null);
-  };
-
-  const handleSaveQuantity = async (orderId: string) => {
-    try {
-      setModifyingSaving(true);
-      await updateOrderQuantity(orderId, modifyQuantity);
-      setModifyingId(null);
-      loadOrders();
-      showToast('Quantity updated', 'success');
-    } catch (error: any) {
-      console.error('Failed to update quantity:', error);
-      showToast(`Failed to update quantity: ${error.message}`, 'error');
-    } finally {
-      setModifyingSaving(false);
-    }
-  };
-
-  const handleSavePrice = async (orderId: string) => {
-    const price = parseFloat(modifyPrice);
-    if (Number.isNaN(price) || price < 0) {
-      showToast('Invalid price', 'error');
-      return;
-    }
-    try {
-      setModifyingSaving(true);
-      await updateOrderLimitPrice(orderId, price);
-      setModifyingId(null);
-      loadOrders();
-      showToast('Limit price updated', 'success');
-    } catch (error: any) {
-      console.error('Failed to update price:', error);
-      showToast(`Failed to update price: ${error.message}`, 'error');
-    } finally {
-      setModifyingSaving(false);
-    }
-  };
-
-  /** Price step: 0.0001 for penny stocks (< $1), 0.01 otherwise */
-  const getPriceStep = (order: Order): string => {
-    const price = order.limitPrice ?? 0;
-    return price < 1 ? '0.0001' : '0.01';
-  };
-
-  const ACTIVE_STATUSES = ['PENDING', 'SCHEDULED', 'SUBMITTED', 'PAUSED'];
-  const COMPLETE_STATUSES = ['FILLED', 'REJECTED', 'CANCELLED', 'EXPIRED'];
-
-  const filteredOrders = filter === 'deleted'
-    ? deletedOrders
-    : orders.filter((order) => {
-        if (filter === 'all') return ACTIVE_STATUSES.includes(order.status) && !order.lastError;
-        if (filter === 'failed') return !!order.lastError && ACTIVE_STATUSES.includes(order.status);
-        if (filter === 'complete') return COMPLETE_STATUSES.includes(order.status);
-        if (filter === 'scheduled') return order.status === 'SCHEDULED' && !order.lastError;
-        if (filter === 'paused') return order.status === 'PAUSED';
-        if (filter === 'pending') return order.status === 'PENDING';
-        if (filter === 'submitted') return order.status === 'SUBMITTED';
-        return true;
-      });
-
-  const pausedCount = orders.filter((o) => o.status === 'PAUSED').length;
-  const scheduledCount = orders.filter((o) => o.status === 'SCHEDULED' && !o.lastError).length;
-  const hasPausedOrders = pausedCount > 0;
-  const hasScheduledOrders = scheduledCount > 0;
-
-  const getStatusColor = (status: string) => {
-    const colors: Record<string, string> = {
-      SCHEDULED: 'bg-blue-500/20 text-blue-400 border border-blue-500/30',
-      PENDING: 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
-      SUBMITTED: 'bg-purple-500/20 text-purple-400 border border-purple-500/30',
-      FILLED: 'bg-green-500/20 text-green-400 border border-green-500/30',
-      REJECTED: 'bg-red-500/20 text-red-400 border border-red-500/30',
-      CANCELLED: 'bg-gray-500/20 text-gray-400 border border-gray-500/30',
-      EXPIRED: 'bg-orange-500/20 text-orange-400 border border-orange-500/30',
-      PAUSED: 'bg-amber-500/20 text-amber-400 border border-amber-500/30',
-      DELETED: 'bg-slate-500/20 text-slate-400 border border-slate-500/30',
+  const handleSaveModify = (
+    order: Order,
+    next: { quantity?: number; limitPrice?: number },
+  ) => {
+    let pending = 0;
+    let errors = 0;
+    const finish = () => {
+      pending--;
+      if (pending === 0) {
+        setModifyingId(null);
+        if (errors === 0) showToast("Order updated", "success");
+      }
     };
-    return colors[status] || 'bg-gray-500/20 text-gray-400';
+    if (next.quantity != null && next.quantity !== order.quantity) {
+      pending++;
+      updateQtyMut.mutate(
+        { orderId: order.id, quantity: next.quantity },
+        {
+          onError: (err) => {
+            errors++;
+            showToast(`Failed to update quantity: ${err.message}`, "error");
+          },
+          onSettled: finish,
+        },
+      );
+    }
+    if (
+      next.limitPrice != null &&
+      order.limitPrice != null &&
+      next.limitPrice !== order.limitPrice
+    ) {
+      pending++;
+      updatePriceMut.mutate(
+        { orderId: order.id, limitPrice: next.limitPrice },
+        {
+          onError: (err) => {
+            errors++;
+            showToast(`Failed to update price: ${err.message}`, "error");
+          },
+          onSettled: finish,
+        },
+      );
+    }
+    if (pending === 0) setModifyingId(null);
   };
 
-  const getScheduleBadge = (order: Order): string | null => {
-    if (!order.scheduleEnabled) return null;
-    if (order.scheduleOnce) return 'ONCE';
-    if (order.scheduleFrequency === 'WEEKLY') return 'WEEKLY';
-    return 'DAILY';
+  const handleCancelModify = () => setModifyingId(null);
+
+  // Build the flat list of items (headers + rows) for the selected view.
+  const items = useMemo<FlatItem[]>(() => {
+    const now = Date.now();
+
+    // Secondary filter narrows the source list.
+    const sourceList: Order[] =
+      secondaryFilter === "deleted"
+        ? deletedOrders
+        : secondaryFilter === "all"
+          ? orders
+          : secondaryFilter === "active"
+            ? orders.filter(isActiveOrder)
+            : secondaryFilter === "paused"
+              ? orders.filter((o) => o.status === "PAUSED")
+              : secondaryFilter === "rejected"
+                ? orders.filter((o) => o.status === "REJECTED" || !!o.lastError)
+                : secondaryFilter === "complete"
+                  ? orders.filter((o) =>
+                      [
+                        "FILLED",
+                        "PARTIALLY_FILLED",
+                        "CANCELLED",
+                        "EXPIRED",
+                      ].includes(o.status),
+                    )
+                  : orders;
+
+    // For the deleted/paused/rejected/complete views we render a flat list
+    // (no time-tier sections). For the default all/active views we section
+    // by tier and group by parent.
+    if (secondaryFilter !== "all" && secondaryFilter !== "active") {
+      const flat: FlatItem[] = [];
+      flat.push({
+        kind: "header",
+        id: `head-${secondaryFilter}`,
+        title:
+          secondaryFilter === "deleted"
+            ? "Deleted"
+            : secondaryFilter === "paused"
+              ? "Paused"
+              : secondaryFilter === "rejected"
+                ? "Rejected"
+                : secondaryFilter === "complete"
+                  ? "Complete"
+                  : "Orders",
+        count: sourceList.length,
+        tier: "today",
+      });
+      for (const o of sourceList) {
+        flat.push({
+          kind: "row",
+          id: o.id,
+          order: o,
+          tier: classifyTier(o, now),
+          isThread: false,
+        });
+      }
+      return flat;
+    }
+
+    // All/Active view: bucket by tier, group threads.
+    // A row with `lineageCount > 0` is a parent recurring template; show as thread.
+    // The active query already excludes the children (children of recurring
+    // templates render as a fresh SCHEDULED clone, which has its own
+    // scheduledFor and is treated as a regular row).
+    const imminent: Order[] = [];
+    const today: Order[] = [];
+    const future: Order[] = [];
+    for (const o of sourceList) {
+      const tier = classifyTier(o, now);
+      if (tier === "imminent") imminent.push(o);
+      else if (tier === "today") today.push(o);
+      else future.push(o);
+    }
+
+    // Status priority: SUBMITTED first, then SCHEDULED, PENDING, PAUSED, etc.
+    const STATUS_PRIORITY: Record<string, number> = {
+      SUBMITTED: 0,
+      SCHEDULED: 1,
+      PENDING: 2,
+      PAUSED: 3,
+      FILLED: 4,
+      PARTIALLY_FILLED: 5,
+      REJECTED: 6,
+      CANCELLED: 7,
+      EXPIRED: 8,
+      DELETED: 9,
+    };
+
+    const sortOrders = (a: Order, b: Order) => {
+      const pa = STATUS_PRIORITY[a.status] ?? 99;
+      const pb = STATUS_PRIORITY[b.status] ?? 99;
+      if (pa !== pb) return pa - pb;
+      // Within the same status, sort by scheduledFor (soonest first).
+      const ta = a.scheduledFor ? new Date(a.scheduledFor).getTime() : 0;
+      const tb = b.scheduledFor ? new Date(b.scheduledFor).getTime() : 0;
+      return ta - tb;
+    };
+    imminent.sort(sortOrders);
+    today.sort(sortOrders);
+    future.sort(sortOrders);
+
+    const flat: FlatItem[] = [];
+    const pushSection = (title: string, tier: RowTier, list: Order[]) => {
+      flat.push({
+        kind: "header",
+        id: `head-${tier}`,
+        title,
+        count: list.length,
+        tier,
+      });
+      for (const o of list) {
+        flat.push({
+          kind: "row",
+          id: o.id,
+          order: o,
+          tier,
+          isThread: (o.lineageCount ?? 0) > 0,
+        });
+      }
+    };
+
+    pushSection("Firing within 30 minutes", "imminent", imminent);
+    pushSection("Today", "today", today);
+    pushSection("Future", "future", future);
+
+    return flat;
+  }, [orders, deletedOrders, secondaryFilter]);
+
+  // Counts for the secondary-filter dropdown.
+  const counts = useMemo(() => {
+    return {
+      all: orders.length,
+      active: orders.filter(isActiveOrder).length,
+      paused: orders.filter((o) => o.status === "PAUSED").length,
+      rejected: orders.filter(
+        (o) =>
+          o.status === "REJECTED" ||
+          (!!o.lastError && ["PENDING", "SCHEDULED"].includes(o.status)),
+      ).length,
+      complete: orders.filter((o) =>
+        ["FILLED", "PARTIALLY_FILLED", "CANCELLED", "EXPIRED"].includes(
+          o.status,
+        ),
+      ).length,
+      deleted: deletedOrders.length,
+    };
+  }, [orders, deletedOrders]);
+
+  const refreshAll = () => {
+    refetchOrders();
+    refetchDeleted();
   };
 
-  const formatExpiration = (exp: string | undefined | null): string => {
-    if (exp == null || exp === '') return '\u2014';
-    const s = String(exp);
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-    const d = new Date(s);
-    return Number.isNaN(d.getTime()) ? '\u2014' : d.toISOString().slice(0, 10);
+  const hasScheduled = orders.some(
+    (o) => o.status === "SCHEDULED" && !o.lastError,
+  );
+  const hasPaused = counts.paused > 0;
+
+  // Virtualize when item count exceeds the threshold. Below it, render
+  // every row directly so React's reconciliation stays the simplest path.
+  const shouldVirtualize = items.length > VIRTUALIZE_THRESHOLD;
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => scrollerRef.current,
+    estimateSize: () => ROW_ESTIMATE_PX,
+    overscan: 8,
+    enabled: shouldVirtualize,
+  });
+
+  // DayStrip onJumpToFire: find the row by data-fires-at and scroll it
+  // into view. We accept the closest-by-time match within +/- 90 min,
+  // because no row is guaranteed to land exactly on the dot's ISO.
+  const scrollToFire = (atISO: string) => {
+    const target = new Date(atISO).getTime();
+    if (!Number.isFinite(target)) return;
+    const nodes = document.querySelectorAll<HTMLElement>("[data-fires-at]");
+    let bestEl: HTMLElement | null = null;
+    let bestDelta = Number.POSITIVE_INFINITY;
+    nodes.forEach((el) => {
+      const at = el.getAttribute("data-fires-at");
+      if (!at) return;
+      const t = new Date(at).getTime();
+      if (!Number.isFinite(t)) return;
+      const d = Math.abs(t - target);
+      if (d < bestDelta) {
+        bestDelta = d;
+        bestEl = el;
+      }
+    });
+    if (bestEl !== null) {
+      (bestEl as HTMLElement).scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      });
+    }
   };
 
-  if (loading) {
+  // Close filter menu on outside click.
+  useEffect(() => {
+    if (!filterMenuOpen) return;
+    const onDocClick = () => setFilterMenuOpen(false);
+    // Defer to skip the click that opened the menu.
+    const id = setTimeout(
+      () => document.addEventListener("click", onDocClick),
+      0,
+    );
+    return () => {
+      clearTimeout(id);
+      document.removeEventListener("click", onDocClick);
+    };
+  }, [filterMenuOpen]);
+
+  if (ordersLoading && orders.length === 0 && deletedOrders.length === 0) {
     return (
-      <div className="flex items-center justify-center py-16">
-        <div className="flex items-center gap-3 text-slate-400">
-          <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-          Loading orders...
-        </div>
+      <div
+        className="mono"
+        style={{
+          padding: 24,
+          textAlign: "center",
+          color: "var(--text-dim)",
+          fontSize: 12,
+        }}
+      >
+        Loading orders...
       </div>
     );
   }
 
   return (
-    <div>
-      {/* Toast notifications */}
-      <div className="fixed top-4 right-4 z-50 flex flex-col gap-2">
-        {toasts.map((toast) => (
+    <div data-testid="order-list">
+      {/* Toasts */}
+      <div
+        style={{
+          position: "fixed",
+          top: 16,
+          right: 16,
+          zIndex: 50,
+          display: "flex",
+          flexDirection: "column",
+          gap: 8,
+        }}
+      >
+        {toasts.map((t) => (
           <div
-            key={toast.id}
-            className={`px-4 py-3 rounded-lg shadow-lg text-sm font-medium ${
-              toast.type === 'success'
-                ? 'bg-green-600 text-white'
-                : 'bg-red-600 text-white'
-            }`}
-            style={{ animation: 'slideIn 0.3s ease-out' }}
+            key={t.id}
+            className="mono"
+            style={{
+              padding: "10px 14px",
+              borderRadius: 6,
+              fontSize: 12,
+              background: t.type === "success" ? "var(--ok)" : "var(--bad)",
+              color: "var(--bg-0)",
+              boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
+              animation: "slideIn 0.3s ease-out",
+            }}
           >
-            {toast.message}
+            {t.message}
           </div>
         ))}
       </div>
 
-      {/* Inline confirmation popover */}
-      {confirmAction && (
+      {/* Day strip OR AuthFix hero when auth is expired (Slice 6.1). */}
+      {authBroken ? (
+        <AuthFix />
+      ) : (
+        <DayStrip events={events} onJumpToFire={scrollToFire} />
+      )}
+
+      {/* Page header */}
+      <div
+        className="mono"
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          padding: "12px 16px",
+          borderBottom: "1px solid var(--bg-2)",
+        }}
+      >
+        <h2
+          style={{
+            fontSize: 14,
+            color: "var(--text)",
+            fontWeight: 600,
+            letterSpacing: "0.04em",
+            textTransform: "uppercase",
+          }}
+        >
+          Active Orders
+        </h2>
+
+        <span style={{ flex: 1 }} />
+
+        {/* Pause all / resume all */}
+        {(hasScheduled || hasPaused) && (
+          <button
+            type="button"
+            onClick={hasPaused ? handleResumeAll : handlePauseAll}
+            className="mono"
+            style={{
+              padding: "5px 10px",
+              borderRadius: 4,
+              border: `1px solid ${hasPaused ? "var(--ok)" : "var(--accent)"}`,
+              color: hasPaused ? "var(--ok)" : "var(--accent)",
+              background: "transparent",
+              fontSize: 11,
+              cursor: "pointer",
+            }}
+          >
+            {hasPaused ? "Resume all" : "Pause all"}
+          </button>
+        )}
+
+        <button
+          type="button"
+          onClick={refreshAll}
+          className="mono"
+          style={{
+            padding: "5px 10px",
+            borderRadius: 4,
+            border: "1px solid var(--bg-3)",
+            color: "var(--text-dim)",
+            background: "transparent",
+            fontSize: 11,
+            cursor: "pointer",
+          }}
+        >
+          Refresh
+        </button>
+
+        {/* Secondary filter dropdown */}
         <div
-          className="fixed inset-0 z-50"
-          onClick={() => setConfirmAction(null)}
+          style={{ position: "relative" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <button
+            type="button"
+            onClick={() => setFilterMenuOpen((v) => !v)}
+            className="mono"
+            style={{
+              padding: "5px 10px",
+              borderRadius: 4,
+              border: "1px solid var(--bg-3)",
+              color:
+                secondaryFilter === "all" ? "var(--text-dim)" : "var(--text)",
+              background:
+                secondaryFilter === "all"
+                  ? "transparent"
+                  : "color-mix(in oklab, var(--text) 5%, transparent)",
+              fontSize: 11,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <span>view: {secondaryFilter}</span>
+            <span aria-hidden style={{ fontSize: 9 }}>
+              ▾
+            </span>
+          </button>
+          {filterMenuOpen && (
+            <div
+              role="menu"
+              style={{
+                position: "absolute",
+                top: "calc(100% + 4px)",
+                right: 0,
+                minWidth: 180,
+                background: "var(--bg-2)",
+                border: "1px solid var(--bg-3)",
+                borderRadius: 6,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+                zIndex: 40,
+                padding: 4,
+              }}
+            >
+              {(
+                [
+                  ["all", "All", counts.all],
+                  ["active", "Active", counts.active],
+                  ["paused", "Paused", counts.paused],
+                  ["rejected", "Rejected", counts.rejected],
+                  ["complete", "Complete", counts.complete],
+                  ["deleted", "Deleted", counts.deleted],
+                ] as const
+              ).map(([k, label, n]) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => {
+                    setSecondaryFilter(k);
+                    setFilterMenuOpen(false);
+                  }}
+                  className="mono"
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    width: "100%",
+                    padding: "6px 10px",
+                    borderRadius: 4,
+                    border: 0,
+                    background:
+                      secondaryFilter === k
+                        ? "color-mix(in oklab, var(--accent) 25%, transparent)"
+                        : "transparent",
+                    color: "var(--text)",
+                    fontSize: 11,
+                    textAlign: "left",
+                    cursor: "pointer",
+                  }}
+                >
+                  <span>{label}</span>
+                  <span style={{ color: "var(--text-dim)" }}>{n}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* List body */}
+      {items.length === 0 ||
+      (items.length === 3 && items.every((it) => it.kind === "header")) ? (
+        <div
+          className="mono"
+          style={{
+            padding: "48px 16px",
+            textAlign: "center",
+            color: "var(--text-dim)",
+            fontSize: 12,
+          }}
+        >
+          No orders.
+        </div>
+      ) : shouldVirtualize ? (
+        <div
+          ref={scrollerRef}
+          style={{
+            // Lift virtualizer's "scrollable element" - we constrain the
+            // height so it has a viewport to virtualize against. Section
+            // headers are inside the virtualized stream so the scroller
+            // is the only scroll surface; per the brief they should stay
+            // outside, but with react-virtual that means duplicating them
+            // OR pinning headers via position: sticky on the items.
+            // Sticky headers via z-index keep both promises:
+            // headers always visible AND virtualized for positioning.
+            height: 720,
+            overflow: "auto",
+            position: "relative",
+          }}
         >
           <div
-            className="absolute border border-slate-600 rounded-xl p-4 shadow-2xl"
             style={{
-              backgroundColor: '#1e293b',
-              right: window.innerWidth - confirmAction.anchor.left + 8,
-              top: confirmAction.anchor.top + confirmAction.anchor.height / 2,
-              transform: 'translateY(-50%)',
-              width: 200,
+              height: virtualizer.getTotalSize(),
+              width: "100%",
+              position: "relative",
             }}
-            onClick={(e) => e.stopPropagation()}
           >
-            <p className="text-white font-semibold text-sm mb-3">
-              {confirmAction.type === 'delete'
-                ? 'Delete order?'
-                : confirmAction.type === 'permanent-delete'
-                  ? 'Permanently delete?'
-                  : 'Submit order?'}
-            </p>
-            <div className="flex gap-2">
-              <button
-                onClick={() => setConfirmAction(null)}
-                className="flex-1 py-2 rounded-lg font-medium text-sm bg-slate-700 hover:bg-slate-600 text-slate-300 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmAction}
-                className={`flex-1 py-2 rounded-lg font-medium text-sm transition-colors ${
-                  confirmAction.type === 'delete' || confirmAction.type === 'permanent-delete'
-                    ? 'bg-red-600 hover:bg-red-700 text-white'
-                    : 'bg-green-600 hover:bg-green-700 text-white'
-                }`}
-              >
-                {confirmAction.label}
-              </button>
-            </div>
+            {virtualizer.getVirtualItems().map((vItem) => {
+              const item = items[vItem.index];
+              return (
+                <div
+                  key={item.id}
+                  data-index={vItem.index}
+                  ref={virtualizer.measureElement}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${vItem.start}px)`,
+                  }}
+                >
+                  {renderItem(
+                    item,
+                    {
+                      onSubmit: handleSubmit,
+                      onPause: handlePause,
+                      onResume: handleResume,
+                      onModify: handleModify,
+                      onDelete: handleDelete,
+                      onRetry: handleSubmit,
+                      onCancelBrokerOrder: handleCancelBrokerOrder,
+                      onToggleOnlyFillOnce: handleToggleOnlyFillOnce,
+                      submittingId,
+                      modifyingId,
+                      onSaveModify: handleSaveModify,
+                      onCancelModify: handleCancelModify,
+                    },
+                    secondaryFilter,
+                    handleRestore,
+                    handlePermanentDelete,
+                  )}
+                </div>
+              );
+            })}
           </div>
-        </div>
-      )}
-
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-semibold text-white">Active Orders</h2>
-        <div className="flex items-center gap-4">
-          {/* Pause All / Resume All toggle */}
-          {(hasScheduledOrders || hasPausedOrders) && (
-            <button
-              onClick={hasPausedOrders ? handleResumeAll : handlePauseAll}
-              className={`px-4 py-2 rounded-lg transition-colors text-sm font-medium ${
-                hasPausedOrders
-                  ? 'bg-green-600/20 hover:bg-green-600/30 text-green-400'
-                  : 'bg-amber-600/20 hover:bg-amber-600/30 text-amber-400'
-              }`}
-            >
-              {hasPausedOrders ? 'Resume All' : 'Pause All'}
-            </button>
-          )}
-          <div className="flex items-center gap-2">
-            <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500 shadow-sm shadow-green-500/50' : 'bg-red-500'}`} />
-            <span className="text-sm text-slate-500">
-              {isConnected ? 'Live' : 'Offline'}
-            </span>
-          </div>
-          <button
-            onClick={loadOrders}
-            className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors text-sm font-medium"
-          >
-            Refresh
-          </button>
-        </div>
-      </div>
-
-      <div className="flex gap-1.5 mb-5 flex-wrap">
-        {(['all', 'scheduled', 'paused', 'pending', 'submitted', 'failed', 'complete', 'deleted'] as const).map((f) => {
-          const failedCount = orders.filter((o) => !!o.lastError && ACTIVE_STATUSES.includes(o.status)).length;
-          const count =
-            f === 'paused' ? pausedCount
-            : f === 'deleted' ? deletedOrders.length
-            : f === 'failed' ? failedCount
-            : 0;
-          return (
-            <button
-              key={f}
-              onClick={() => setFilter(f)}
-              className={`px-3.5 py-1.5 rounded-lg capitalize text-sm font-medium transition-all ${
-                filter === f
-                  ? f === 'failed' ? 'bg-red-600 text-white shadow-sm shadow-red-600/30'
-                    : f === 'paused' ? 'bg-amber-600/20 text-amber-400'
-                    : f === 'deleted' ? 'bg-slate-600/20 text-slate-400'
-                    : 'bg-blue-600/20 text-blue-400'
-                  : f === 'failed' && failedCount > 0
-                    ? 'bg-red-500/10 text-red-400 hover:bg-red-500/20'
-                    : f === 'paused' && pausedCount > 0
-                      ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20'
-                      : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800'
-              }`}
-            >
-              {f}{count > 0 ? ` (${count})` : ''}
-            </button>
-          );
-        })}
-      </div>
-
-      {filteredOrders.length === 0 ? (
-        <div className="text-center py-16 bg-slate-800/50 rounded-xl border border-slate-700/50">
-          <svg className="w-12 h-12 mx-auto text-slate-600 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-          </svg>
-          <p className="text-slate-500 text-sm">No orders found</p>
         </div>
       ) : (
-        <div className="space-y-3">
-          {filteredOrders.map((order) => {
-            const isModifying = modifyingId === order.id;
-            const priceStep = getPriceStep(order);
-            const isDeleted = order.status === 'DELETED';
-
-            return (
-              <div
-                key={order.id}
-                className={`bg-slate-800/80 rounded-xl p-4 border border-slate-700/50 hover:border-slate-600/80 transition-all ${
-                  isDeleted ? 'opacity-70' : ''
-                }`}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mb-2">
-                      <h3 className="text-lg font-bold text-white tracking-tight">{order.symbol}</h3>
-                      {order.securityType === 'OPTION' && (
-                        <span className="px-2 py-0.5 text-xs rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                          Option
-                        </span>
-                      )}
-                      <span className={`px-2 py-0.5 text-xs rounded-md font-medium ${getStatusColor(order.status)}`}>
-                        {order.status}
-                      </span>
-                      {getScheduleBadge(order) && (
-                        <span className="px-2 py-0.5 text-xs rounded-md bg-amber-500/20 text-amber-400 border border-amber-500/30">
-                          {getScheduleBadge(order)}
-                        </span>
-                      )}
-                    </div>
-                    {order.securityType === 'OPTION' && (
-                      <div className="text-sm text-slate-300 mb-2">
-                        <span className="text-slate-500">Option:</span>{' '}
-                        {order.optionType ?? '\u2014'}{' '}
-                        {order.strikePrice != null ? `$${order.strikePrice}` : '\u2014'} exp{' '}
-                        {formatExpiration(order.expirationDate)}
-                      </div>
-                    )}
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1.5 text-sm">
-                      <div>
-                        <span className="text-slate-500">Action:</span>{' '}
-                        <span className={order.action === 'BUY' || order.action === 'BUY_TO_COVER' ? 'text-green-400' : 'text-red-400'}>
-                          {order.action}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500">Type:</span>{' '}
-                        <span className="text-slate-300">{order.orderType}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500">Qty:</span>{' '}
-                        {isModifying ? (
-                          <span className="inline-flex items-center gap-1">
-                            <input
-                              type="number"
-                              inputMode="numeric"
-                              min="1"
-                              step="1"
-                              value={modifyQuantity}
-                              onChange={(e) => {
-                                const val = parseInt(e.target.value, 10);
-                                if (!Number.isNaN(val) && val >= 1) setModifyQuantity(val);
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleSaveQuantity(order.id);
-                                if (e.key === 'Escape') handleCancelModify();
-                              }}
-                              autoFocus
-                              className="w-20 px-2 py-0.5 bg-slate-700 border border-blue-500 rounded text-white text-sm focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-auto [&::-webkit-inner-spin-button]:appearance-auto"
-                            />
-                            <button
-                              onClick={() => handleSaveQuantity(order.id)}
-                              disabled={modifyingSaving}
-                              className="px-2 py-0.5 text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded transition-colors"
-                            >
-                              {modifyingSaving ? '...' : 'OK'}
-                            </button>
-                          </span>
-                        ) : (
-                          <span className="text-slate-300">{order.quantity}</span>
-                        )}
-                      </div>
-                      {order.limitPrice != null && (
-                        <div>
-                          <span className="text-slate-500">Limit:</span>{' '}
-                          {isModifying ? (
-                            <span className="inline-flex items-center gap-1">
-                              <input
-                                type="number"
-                                inputMode="decimal"
-                                min="0"
-                                step={priceStep}
-                                value={modifyPrice}
-                                onChange={(e) => setModifyPrice(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter') handleSavePrice(order.id);
-                                  if (e.key === 'Escape') handleCancelModify();
-                                }}
-                                className="w-24 px-2 py-0.5 bg-slate-700 border border-blue-500 rounded text-white text-sm focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-auto [&::-webkit-inner-spin-button]:appearance-auto"
-                              />
-                              <button
-                                onClick={() => handleSavePrice(order.id)}
-                                disabled={modifyingSaving}
-                                className="px-2 py-0.5 text-xs bg-blue-600 hover:bg-blue-700 disabled:bg-blue-600/50 text-white rounded transition-colors"
-                              >
-                                {modifyingSaving ? '...' : 'OK'}
-                              </button>
-                            </span>
-                          ) : (
-                            <span className="text-slate-300">${order.limitPrice}</span>
-                          )}
-                        </div>
-                      )}
-                      <div>
-                        <span className="text-slate-500">Term:</span>{' '}
-                        <span className="text-slate-300">{order.actualDuration}</span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500">Session:</span>{' '}
-                        <span className="text-slate-300">{order.sessionTime}</span>
-                      </div>
-                      {order.scheduledFor && (
-                        <div className="col-span-2">
-                          <span className="text-slate-500">Next run:</span>{' '}
-                          <span className="text-slate-300">{new Date(order.scheduledFor).toLocaleString()}</span>
-                        </div>
-                      )}
-                    </div>
-                    {isModifying && (
-                      <div className="mt-2">
-                        <button
-                          onClick={handleCancelModify}
-                          className="px-2.5 py-1 text-xs bg-slate-700 hover:bg-slate-600 text-slate-400 rounded transition-colors"
-                        >
-                          Cancel editing
-                        </button>
-                      </div>
-                    )}
-                    {order.lastError && (
-                      <div className="mt-2 p-2.5 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-400">
-                        {order.lastError}
-                      </div>
-                    )}
-                  </div>
-                  <div className="ml-4 flex flex-col gap-2 shrink-0">
-                    {/* Deleted order actions */}
-                    {isDeleted && (
-                      <>
-                        <button
-                          onClick={() => handleRestore(order.id)}
-                          className="px-3 py-1.5 text-sm bg-green-600/20 hover:bg-green-600/30 text-green-400 rounded-lg transition-colors font-medium"
-                        >
-                          Restore
-                        </button>
-                        <button
-                          onClick={(e) =>
-                            setConfirmAction({ orderId: order.id, type: 'permanent-delete', label: 'Delete Forever', anchor: e.currentTarget.getBoundingClientRect() })
-                          }
-                          className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
-                        >
-                          Delete Forever
-                        </button>
-                      </>
-                    )}
-                    {/* Active order actions */}
-                    {!isDeleted && (order.status === 'PENDING' || order.status === 'SCHEDULED' || order.status === 'PAUSED') && (
-                      <>
-                        {order.status !== 'PAUSED' && (
-                          <button
-                            onClick={(e) =>
-                              setConfirmAction({ orderId: order.id, type: 'submit', label: 'Submit', anchor: e.currentTarget.getBoundingClientRect() })
-                            }
-                            disabled={submittingId === order.id}
-                            className="px-3 py-1.5 text-sm bg-green-600 hover:bg-green-700 disabled:bg-green-600/50 text-white rounded-lg transition-colors font-medium"
-                          >
-                            {submittingId === order.id ? 'Sending...' : 'Submit'}
-                          </button>
-                        )}
-                        {order.status === 'SCHEDULED' && (
-                          <button
-                            onClick={() => handlePauseOrder(order.id)}
-                            className="px-3 py-1.5 text-sm bg-amber-600/20 hover:bg-amber-600/30 text-amber-400 rounded-lg transition-colors font-medium"
-                          >
-                            Pause
-                          </button>
-                        )}
-                        {order.status === 'PAUSED' && (
-                          <button
-                            onClick={() => handleResumeOrder(order.id)}
-                            className="px-3 py-1.5 text-sm bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded-lg transition-colors font-medium"
-                          >
-                            Resume
-                          </button>
-                        )}
-                        {order.status !== 'PAUSED' && (
-                          <button
-                            onClick={() => isModifying ? handleCancelModify() : handleStartModify(order)}
-                            className={`px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${
-                              isModifying
-                                ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'
-                                : 'bg-slate-700 hover:bg-slate-600 text-slate-300'
-                            }`}
-                          >
-                            {isModifying ? 'Done' : 'Modify'}
-                          </button>
-                        )}
-                      </>
-                    )}
-                    {!isDeleted && (
-                      <button
-                        onClick={(e) =>
-                          setConfirmAction({ orderId: order.id, type: 'delete', label: 'Delete', anchor: e.currentTarget.getBoundingClientRect() })
-                        }
-                        className="px-3 py-1.5 text-sm bg-red-600/10 hover:bg-red-600/20 text-red-400 rounded-lg transition-colors font-medium"
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
+        <div>
+          {items.map((item) =>
+            renderItem(
+              item,
+              {
+                onSubmit: handleSubmit,
+                onPause: handlePause,
+                onResume: handleResume,
+                onModify: handleModify,
+                onDelete: handleDelete,
+                onRetry: handleSubmit,
+                onCancelBrokerOrder: handleCancelBrokerOrder,
+                onToggleOnlyFillOnce: handleToggleOnlyFillOnce,
+                submittingId,
+                modifyingId,
+                onSaveModify: handleSaveModify,
+                onCancelModify: handleCancelModify,
+              },
+              secondaryFilter,
+              handleRestore,
+              handlePermanentDelete,
+            ),
+          )}
         </div>
       )}
+    </div>
+  );
+}
+
+interface RowHandlers {
+  onSubmit: (id: string) => void;
+  onPause: (id: string) => void;
+  onResume: (id: string) => void;
+  onModify: (order: Order) => void;
+  onDelete: (id: string) => void;
+  onRetry: (id: string) => void;
+  onCancelBrokerOrder: (accountIdKey: string, brokerOrderId: string) => void;
+  onToggleOnlyFillOnce: (id: string, next: boolean) => void;
+  submittingId: string | null;
+  modifyingId?: string | null;
+  onSaveModify?: (
+    order: Order,
+    next: { quantity?: number; limitPrice?: number },
+  ) => void;
+  onCancelModify?: () => void;
+}
+
+function renderItem(
+  item: FlatItem,
+  handlers: RowHandlers,
+  secondary: SecondaryFilter,
+  onRestore: (id: string) => void,
+  onPermanentDelete: (id: string) => void,
+): JSX.Element {
+  if (item.kind === "header") {
+    return (
+      <SectionHeader
+        key={item.id}
+        title={item.title}
+        count={item.count}
+        tier={item.tier}
+      />
+    );
+  }
+  // Deleted view gets its own row treatment with Restore / Forever.
+  if (secondary === "deleted") {
+    return (
+      <DeletedRow
+        key={item.id}
+        order={item.order}
+        onRestore={onRestore}
+        onPermanentDelete={onPermanentDelete}
+      />
+    );
+  }
+  if (handlers.modifyingId && item.order.id === handlers.modifyingId) {
+    return (
+      <ModifyRowCell
+        key={item.id}
+        order={item.order}
+        onSave={(next) => handlers.onSaveModify?.(item.order, next)}
+        onCancel={() => handlers.onCancelModify?.()}
+      />
+    );
+  }
+  if (item.isThread) {
+    return (
+      <OrderThread
+        key={item.id}
+        parent={item.order}
+        tier={item.tier}
+        rowHandlers={handlers}
+      />
+    );
+  }
+  return (
+    <OrderRow key={item.id} order={item.order} tier={item.tier} {...handlers} />
+  );
+}
+
+function SectionHeader({
+  title,
+  count,
+  tier,
+}: {
+  title: string;
+  count: number;
+  tier: RowTier;
+}) {
+  const isImminent = tier === "imminent";
+  return (
+    <div
+      className="mono"
+      style={{
+        position: "sticky",
+        top: 0,
+        zIndex: 5,
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 16px",
+        background: isImminent
+          ? "color-mix(in oklab, var(--accent) 18%, var(--bg-1))"
+          : "var(--bg-1)",
+        borderBottom: "1px solid var(--bg-2)",
+        borderTop: "1px solid var(--bg-2)",
+        fontSize: 11,
+        letterSpacing: "0.06em",
+        textTransform: "uppercase",
+        color: isImminent ? "var(--accent)" : "var(--text-dim)",
+      }}
+    >
+      {isImminent && (
+        <span
+          aria-hidden
+          style={{
+            width: 6,
+            height: 6,
+            borderRadius: 999,
+            background: "var(--accent)",
+            animation: "tp-pulse 1.6s ease-in-out infinite",
+          }}
+        />
+      )}
+      <span>{title}</span>
+      <span style={{ color: "var(--text-dim)", opacity: 0.7 }}>· {count}</span>
+    </div>
+  );
+}
+
+function DeletedRow({
+  order,
+  onRestore,
+  onPermanentDelete,
+}: {
+  order: Order;
+  onRestore: (id: string) => void;
+  onPermanentDelete: (id: string) => void;
+}) {
+  return (
+    <div
+      className="mono"
+      data-testid="deleted-row"
+      style={{
+        display: "grid",
+        gridTemplateColumns: "120px 1fr auto",
+        alignItems: "center",
+        gap: 12,
+        padding: "10px 16px",
+        borderBottom: "1px solid var(--bg-2)",
+        opacity: 0.7,
+        background: "var(--bg-1)",
+      }}
+    >
+      <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+        {order.action} · {order.symbol}
+      </span>
+      <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+        qty {order.quantity}
+        {order.limitPrice != null && ` @ $${order.limitPrice}`}
+        {" · "}
+        {order.orderType}
+      </span>
+      <span style={{ display: "inline-flex", gap: 6 }}>
+        <button
+          type="button"
+          onClick={() => onRestore(order.id)}
+          className="mono"
+          style={{
+            padding: "3px 8px",
+            borderRadius: 4,
+            border: "1px solid var(--ok)",
+            color: "var(--ok)",
+            background: "transparent",
+            fontSize: 10.5,
+            cursor: "pointer",
+          }}
+        >
+          Restore
+        </button>
+        <button
+          type="button"
+          onClick={() => onPermanentDelete(order.id)}
+          className="mono"
+          style={{
+            padding: "3px 8px",
+            borderRadius: 4,
+            border: "1px solid var(--bad)",
+            color: "var(--bad)",
+            background: "transparent",
+            fontSize: 10.5,
+            cursor: "pointer",
+          }}
+        >
+          Forever
+        </button>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Slice 5 polish — in-place modify cell.
+ *
+ * Renders in place of OrderRow when a row enters modify mode. Quantity is
+ * always editable; limit price is editable when the order had one. Save
+ * (or ↵) calls back through handlers.onSaveModify; ESC or Cancel returns to
+ * the row view via handlers.onCancelModify. No modal.
+ */
+function ModifyRowCell({
+  order,
+  onSave,
+  onCancel,
+}: {
+  order: Order;
+  onSave: (next: { quantity?: number; limitPrice?: number }) => void;
+  onCancel: () => void;
+}) {
+  const [qty, setQty] = useState<string>(String(order.quantity));
+  const [px, setPx] = useState<string>(
+    order.limitPrice != null ? String(order.limitPrice) : "",
+  );
+  const qtyRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    qtyRef.current?.focus();
+    qtyRef.current?.select();
+  }, []);
+
+  const commit = () => {
+    const next: { quantity?: number; limitPrice?: number } = {};
+    const qNum = parseInt(qty, 10);
+    if (!Number.isNaN(qNum) && qNum >= 1) next.quantity = qNum;
+    if (order.limitPrice != null) {
+      const pNum = parseFloat(px);
+      if (!Number.isNaN(pNum) && pNum >= 0) next.limitPrice = pNum;
+    }
+    onSave(next);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+    }
+  };
+
+  return (
+    <div
+      onKeyDown={onKeyDown}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: "10px 16px",
+        borderBottom: "1px solid var(--bg-2)",
+        background: "color-mix(in oklab, var(--info) 10%, var(--bg-1))",
+        borderLeft: "3px solid var(--info)",
+      }}
+    >
+      <span
+        className="mono"
+        style={{
+          fontSize: 11,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          color: "var(--info)",
+          minWidth: 70,
+        }}
+      >
+        Modify
+      </span>
+      <span
+        style={{
+          color: "var(--text)",
+          fontSize: 13,
+          fontWeight: 600,
+          minWidth: 70,
+        }}
+      >
+        {order.symbol}
+      </span>
+      <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span
+          style={{
+            color: "var(--text-dim)",
+            fontSize: 11,
+            textTransform: "uppercase",
+          }}
+        >
+          qty
+        </span>
+        <input
+          ref={qtyRef}
+          type="number"
+          min={1}
+          value={qty}
+          onChange={(e) => setQty(e.target.value)}
+          style={{
+            width: 90,
+            padding: "6px 8px",
+            background: "var(--bg-2)",
+            border: "1px solid var(--bg-3)",
+            borderRadius: 6,
+            color: "var(--text)",
+            fontSize: 13,
+            outline: "none",
+          }}
+        />
+      </label>
+      {order.limitPrice != null && (
+        <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span
+            style={{
+              color: "var(--text-dim)",
+              fontSize: 11,
+              textTransform: "uppercase",
+            }}
+          >
+            limit
+          </span>
+          <input
+            type="number"
+            step="0.01"
+            value={px}
+            onChange={(e) => setPx(e.target.value)}
+            style={{
+              width: 110,
+              padding: "6px 8px",
+              background: "var(--bg-2)",
+              border: "1px solid var(--bg-3)",
+              borderRadius: 6,
+              color: "var(--text)",
+              fontSize: 13,
+              outline: "none",
+            }}
+          />
+        </label>
+      )}
+      <span
+        style={{ color: "var(--text-dim)", fontSize: 11, marginLeft: "auto" }}
+      >
+        ↵ save · ESC cancel
+      </span>
+      <button
+        type="button"
+        onClick={commit}
+        style={{
+          padding: "6px 12px",
+          borderRadius: 6,
+          border: "1px solid var(--info)",
+          background: "color-mix(in oklab, var(--info) 22%, transparent)",
+          color: "var(--info)",
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: "pointer",
+        }}
+      >
+        Save
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        style={{
+          padding: "6px 12px",
+          borderRadius: 6,
+          border: "1px solid var(--bg-3)",
+          background: "transparent",
+          color: "var(--text-dim)",
+          fontSize: 12,
+          cursor: "pointer",
+        }}
+      >
+        Cancel
+      </button>
     </div>
   );
 }

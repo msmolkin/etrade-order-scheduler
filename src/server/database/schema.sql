@@ -4,6 +4,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Orders table
 CREATE TABLE IF NOT EXISTS orders (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  parent_id UUID NOT NULL,
   account_id VARCHAR(255) NOT NULL,
   symbol VARCHAR(50) NOT NULL,
   security_type VARCHAR(50) NOT NULL,
@@ -91,8 +92,11 @@ CREATE TABLE IF NOT EXISTS order_executions (
 -- Indexes for performance
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
 CREATE INDEX IF NOT EXISTS idx_orders_scheduled_for ON orders(scheduled_for) WHERE schedule_enabled = true;
+-- Composite for the Active-orders single-query path (status filter + ordered by scheduled_for).
+CREATE INDEX IF NOT EXISTS idx_orders_status_scheduled_for ON orders(status, scheduled_for);
 CREATE INDEX IF NOT EXISTS idx_orders_account_id ON orders(account_id);
 CREATE INDEX IF NOT EXISTS idx_orders_symbol ON orders(symbol);
+CREATE INDEX IF NOT EXISTS idx_orders_parent_id ON orders(parent_id);
 CREATE INDEX IF NOT EXISTS idx_orders_expires_at ON orders(expires_at) WHERE expires_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_scheduled_locks_time ON scheduled_order_locks(scheduled_time, locked);
 CREATE INDEX IF NOT EXISTS idx_order_executions_order_id ON order_executions(order_id);
@@ -202,4 +206,36 @@ BEGIN
                  WHERE table_name = 'orders' AND column_name = 'schedule_frequency') THEN
     ALTER TABLE orders ADD COLUMN schedule_frequency VARCHAR(10) NOT NULL DEFAULT 'DAILY';
   END IF;
+
+  -- Add parent_id (recurring-stream identity for per-stream dedup)
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'orders' AND column_name = 'parent_id') THEN
+    ALTER TABLE orders ADD COLUMN parent_id UUID;
+    UPDATE orders SET parent_id = id WHERE parent_id IS NULL;
+    ALTER TABLE orders ALTER COLUMN parent_id SET NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_orders_parent_id ON orders (parent_id);
+  END IF;
+
+  -- Add only_fill_once: when a recurring order's placement actually fills at
+  -- E*TRADE, future scheduled clones in the lineage are cancelled.
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'orders' AND column_name = 'only_fill_once') THEN
+    ALTER TABLE orders ADD COLUMN only_fill_once BOOLEAN NOT NULL DEFAULT true;
+  END IF;
+
+  -- Add filled_quantity: shares filled at E*TRADE (set by verifyOrderStatus).
+  -- Drives partial-fill propagation: tomorrow's clone gets orderedQty - filledQty.
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name = 'orders' AND column_name = 'filled_quantity') THEN
+    ALTER TABLE orders ADD COLUMN filled_quantity INTEGER;
+  END IF;
 END $$;
+
+-- Scheduler heartbeat (Slice 6.2): single-row table that the scheduler
+-- upserts every 60s. /api/health surfaces last_seen_at + age so the
+-- client SystemStatusBar can render fresh / stale / down states.
+CREATE TABLE IF NOT EXISTS scheduler_heartbeat (
+  id VARCHAR(64) PRIMARY KEY,
+  last_seen_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  source VARCHAR(64) NOT NULL DEFAULT 'local-scheduler'
+);

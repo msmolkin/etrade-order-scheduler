@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import 'dotenv/config';
+import { buildEtradeAuthorizationUrl } from '../shared/auth/etrade-oauth-url.js';
 
 const SANDBOX = process.env.ETRADE_SANDBOX === 'true';
 // OAuth endpoints always use production URL per E*TRADE documentation
@@ -108,7 +109,7 @@ async function getRequestToken(): Promise<{ token: string; tokenSecret: string }
 }
 
 function getAuthorizationUrl(requestToken: string): string {
-  const authUrl = `https://us.etrade.com/e/t/etws/authorize?key=${CONSUMER_KEY}&token=${requestToken}`;
+  const authUrl = buildEtradeAuthorizationUrl(CONSUMER_KEY, requestToken);
   
   console.log('\n┌─────────────────────────────────────────────────────────────┐');
   console.log('│  REQUEST: GET /e/t/etws/authorize (Browser Redirect)        │');

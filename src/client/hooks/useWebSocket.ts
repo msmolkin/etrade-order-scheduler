@@ -1,60 +1,19 @@
-import { useEffect, useRef, useState } from 'react';
+/**
+ * Slice 3.2 compatibility shim.
+ *
+ * The legacy useWebSocket(url) created its own per-component socket. After
+ * Slice 3.2 the app owns one shared socket via WSProvider. This hook
+ * exposes the same {isConnected, lastMessage, sendMessage} surface so any
+ * unmigrated callers (none in this repo today, but keep the door open) keep
+ * working without spawning a second connection.
+ *
+ * The `url` argument is intentionally ignored; the shared provider always
+ * targets `ws://${window.location.host}/ws`. New code should call
+ * useWS()/useWSEvent() from ./WSProvider directly.
+ */
+import { useWS } from "./WSProvider";
 
-interface WebSocketMessage {
-  type: string;
-  [key: string]: any;
-}
-
-export function useWebSocket(url: string) {
-  const [isConnected, setIsConnected] = useState(false);
-  const [lastMessage, setLastMessage] = useState<WebSocketMessage | null>(null);
-  const ws = useRef<WebSocket | null>(null);
-
-  useEffect(() => {
-    const connect = () => {
-      ws.current = new WebSocket(url);
-
-      ws.current.onopen = () => {
-        console.log('WebSocket connected');
-        setIsConnected(true);
-      };
-
-      ws.current.onclose = () => {
-        console.log('WebSocket disconnected');
-        setIsConnected(false);
-
-        // Reconnect after 5 seconds
-        setTimeout(connect, 5000);
-      };
-
-      ws.current.onerror = (error) => {
-        console.error('WebSocket error:', error);
-      };
-
-      ws.current.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          setLastMessage(message);
-        } catch (error) {
-          console.error('Failed to parse WebSocket message:', error);
-        }
-      };
-    };
-
-    connect();
-
-    return () => {
-      if (ws.current) {
-        ws.current.close();
-      }
-    };
-  }, [url]);
-
-  const sendMessage = (message: any) => {
-    if (ws.current && ws.current.readyState === WebSocket.OPEN) {
-      ws.current.send(JSON.stringify(message));
-    }
-  };
-
-  return { isConnected, lastMessage, sendMessage };
+export function useWebSocket(_url?: string) {
+  const { isConnected, lastMessage, send } = useWS();
+  return { isConnected, lastMessage, sendMessage: send };
 }

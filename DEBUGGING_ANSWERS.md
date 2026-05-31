@@ -41,7 +41,7 @@ This document captures the results of the diagnostics and the steps that fix "Fa
   Often uses **5433**. Then use:  
   `DATABASE_URL=postgresql://YOUR_USER@localhost:5433/etrade_trader`
 
-Replace `YOUR_USER` with your **macOS username** (e.g. `michael`). When you run `initdb`, PostgreSQL creates a superuser role matching the OS user who ran it; with **trust** authentication for local connections (the default from initdb), no password is needed, so `postgresql://michael@localhost:5432/etrade_trader` works. You can also use a dedicated DB user (e.g. `etrade_user`) and add `:password` if you use password auth. The project expects a database named `etrade_trader` (or whatever you create and put in the URL).
+Replace `YOUR_USER` with your **macOS username** (e.g. `michael`). When you run `initdb`, PostgreSQL creates a superuser role matching the OS user who ran it; with **trust** authentication for local connections (the default from initdb), no password is needed, so `postgresql://YOUR_USER@localhost:5432/etrade_trader` works. You can also use a dedicated DB user (e.g. `etrade_user`) and add `:password` if you use password auth. The project expects a database named `etrade_trader` (or whatever you create and put in the URL).
 
 ### "Homebrew postgresql@14 often uses port 5433"
 
@@ -69,7 +69,7 @@ Replace `YOUR_USER` with your **macOS username** (e.g. `michael`). When you run 
    - If you use a dedicated user: `createuser -s etrade_user` then `createdb -O etrade_user etrade_trader`.
 
 4. **Set DATABASE_URL in .env**
-   - Use the **host**, **port**, **user**, and **database** that match the running Postgres (e.g. `postgresql://michael@localhost:5432/etrade_trader` or `...localhost:5433/...`).
+   - Use the **host**, **port**, **user**, and **database** that match the running Postgres (e.g. `postgresql://YOUR_USER@localhost:5432/etrade_trader` or `...localhost:5433/...`).
 
 5. **Start the app**
    - `ETRADE_SANDBOX=false npm run dev`
@@ -105,7 +105,7 @@ On this machine the fix was:
 
 3. **Created the database:** `createdb etrade_trader`
 
-4. **`.env` already had:** `DATABASE_URL=postgresql://michael@localhost:5432/etrade_trader` — no change needed. The user `michael` is the macOS username; initdb created that superuser when the cluster was initialized, and with trust auth for local connections no password is required.
+4. **`.env` already had:** `DATABASE_URL=postgresql://YOUR_USER@localhost:5432/etrade_trader` — no change needed. The user `michael` is the macOS username; initdb created that superuser when the cluster was initialized, and with trust auth for local connections no password is required.
 
 5. **Restarted the app** — server showed "✓ Connected to PostgreSQL database" and "Database: schema applied (tables ready)".
 

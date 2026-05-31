@@ -1,10 +1,18 @@
-import { v4 as uuidv4 } from 'uuid';
-import { query, transaction } from '../database/client.js';
-import type { Order, OrderStatus, SessionTime } from '../../shared/types/index.js';
-import type pg from 'pg';
+import { v4 as uuidv4 } from "uuid";
+import { query, transaction } from "../database/client.js";
+import type {
+  Order,
+  OrderStatus,
+  SessionTime,
+} from "../../shared/types/index.js";
+import type pg from "pg";
 
 export class OrderService {
-  async createOrder(order: Omit<Order, 'id' | 'createdAt' | 'updatedAt'>): Promise<Order> {
+  async createOrder(
+    order: Omit<Order, "id" | "parentId" | "createdAt" | "updatedAt"> & {
+      parentId?: string;
+    },
+  ): Promise<Order> {
     const id = uuidv4();
     const now = new Date();
 
@@ -18,11 +26,12 @@ export class OrderService {
         threshold_enabled, threshold_price, threshold_price_source, threshold_quantity,
         threshold_poll_interval_ms, threshold_log_file, sell_order_enabled,
         sell_order_threshold_price, sell_order_threshold_price_source, sell_order_quantity,
-        sell_order_triggered_by_order_id
+        sell_order_triggered_by_order_id, parent_id, only_fill_once, filled_quantity
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
         $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29,
-        $30, $31, $32, $33, $34, $35, $36, $37, $38
+        $30, $31, $32, $33, $34, $35, $36, $37, $38, COALESCE($39::uuid, $1::uuid),
+        $40, $41
       ) RETURNING *`,
       [
         id,
@@ -63,7 +72,10 @@ export class OrderService {
         order.sellOrderThresholdPriceSource,
         order.sellOrderQuantity,
         order.sellOrderTriggeredByOrderId,
-      ]
+        order.parentId ?? null,
+        order.onlyFillOnce ?? true,
+        order.filledQuantity ?? null,
+      ],
     );
 
     // If scheduled, create lock entry
@@ -75,8 +87,68 @@ export class OrderService {
   }
 
   async getOrder(id: string): Promise<Order | null> {
-    const result = await query<Order>('SELECT * FROM orders WHERE id = $1', [id]);
+    const result = await query<Order>("SELECT * FROM orders WHERE id = $1", [
+      id,
+    ]);
     return result.rows.length > 0 ? this.mapRowToOrder(result.rows[0]) : null;
+  }
+
+  async findExistingScheduledClone(
+    parentId: string,
+    scheduledFor: Date,
+  ): Promise<Order | null> {
+    const result = await query<Order>(
+      `SELECT * FROM orders WHERE parent_id = $1 AND scheduled_for = $2 AND status IN ('SCHEDULED','PENDING') LIMIT 1`,
+      [parentId, scheduledFor],
+    );
+    return result.rows.length > 0 ? this.mapRowToOrder(result.rows[0]) : null;
+  }
+
+  async lineageHasFilledOrder(parentId: string): Promise<boolean> {
+    const result = await query<{ exists: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM orders
+          WHERE parent_id = $1
+            AND status = 'FILLED'
+       ) AS "exists"`,
+      [parentId],
+    );
+    return result.rows[0]?.exists ?? false;
+  }
+
+  /**
+   * Single-statement Active-orders query with parent rollup.
+   *
+   * Returns orders in actionable statuses plus two lineage aggregates so the client
+   * can render the OrderThread without a follow-up roundtrip:
+   *   - parent_symbol  (symbol of the parent recurring template, when this row is a clone)
+   *   - lineage_count  (number of children with the same parent_id)
+   *   - last_fill_at   (most recent filled_at across the lineage)
+   *
+   * Uses idx_orders_status_scheduled_for for the WHERE/ORDER BY.
+   */
+  async getActiveOrdersWithLineage(limit: number = 500): Promise<Order[]> {
+    const result = await query<any>(
+      `SELECT o.*,
+              parent.symbol AS parent_symbol,
+              (SELECT COUNT(*) FROM orders c WHERE c.parent_id = o.id) AS lineage_count,
+              (SELECT MAX(filled_at) FROM orders c WHERE c.parent_id = o.id AND c.status = 'FILLED') AS last_fill_at
+         FROM orders o
+         LEFT JOIN orders parent ON o.parent_id = parent.id
+        WHERE o.status != 'DELETED'
+          AND o.status IN ('SCHEDULED','PENDING','SUBMITTED','PARTIALLY_FILLED','PAUSED','REJECTED')
+        ORDER BY o.scheduled_for ASC NULLS LAST
+        LIMIT $1`,
+      [limit],
+    );
+    return result.rows.map((row) => {
+      const order = this.mapRowToOrder(row);
+      order.parentSymbol = row.parent_symbol ?? null;
+      order.lineageCount =
+        row.lineage_count != null ? Number(row.lineage_count) : 0;
+      order.lastFillAt = row.last_fill_at ?? null;
+      return order;
+    });
   }
 
   async getOrders(filters: {
@@ -104,7 +176,7 @@ export class OrderService {
       params.push(filters.scheduleEnabled);
     }
 
-    sql += ' ORDER BY created_at DESC';
+    sql += " ORDER BY created_at DESC";
 
     if (filters.limit) {
       sql += ` LIMIT $${paramCount++}`;
@@ -115,18 +187,39 @@ export class OrderService {
     return result.rows.map((row) => this.mapRowToOrder(row));
   }
 
+  /**
+   * Children of a parent recurring order, ordered newest-first.
+   * Used by the OrderThread expand panel to render the lineage history.
+   * Limit defaults to 10 - the strip shows 6 cells but we fetch a few extra
+   * so the inline expand can scroll without a follow-up roundtrip.
+   */
+  async getChildOrders(parentId: string, limit: number = 10): Promise<Order[]> {
+    const result = await query<Order>(
+      `SELECT * FROM orders
+       WHERE parent_id = $1
+         AND id != $1
+       ORDER BY created_at DESC
+       LIMIT $2`,
+      [parentId, limit],
+    );
+    return result.rows.map((row) => this.mapRowToOrder(row));
+  }
+
   async getExpiredOrders(limit: number = 50): Promise<Order[]> {
     const result = await query<Order>(
       `SELECT * FROM orders
        WHERE status = 'EXPIRED'
        ORDER BY expires_at DESC
        LIMIT $1`,
-      [limit]
+      [limit],
     );
     return result.rows.map((row) => this.mapRowToOrder(row));
   }
 
-  async getScheduledOrders(time: Date, sessionTime: SessionTime): Promise<Order[]> {
+  async getScheduledOrders(
+    time: Date,
+    sessionTime: SessionTime,
+  ): Promise<Order[]> {
     const result = await query<Order>(
       `SELECT o.* FROM orders o
        INNER JOIN scheduled_order_locks l ON o.id = l.order_id
@@ -136,7 +229,7 @@ export class OrderService {
        AND l.scheduled_time <= $2
        AND l.locked = false
        ORDER BY l.scheduled_time ASC`,
-      [sessionTime, time]
+      [sessionTime, time],
     );
     return result.rows.map((row) => this.mapRowToOrder(row));
   }
@@ -151,7 +244,7 @@ export class OrderService {
        AND l.scheduled_time <= $1
        AND l.locked = false
        ORDER BY l.scheduled_time ASC`,
-      [time]
+      [time],
     );
     return result.rows.map((row) => this.mapRowToOrder(row));
   }
@@ -166,9 +259,9 @@ export class OrderService {
       filledAt?: Date;
       cancelledAt?: Date;
       expiresAt?: Date;
-    }
+    },
   ): Promise<void> {
-    const fields: string[] = ['status = $2'];
+    const fields: string[] = ["status = $2"];
     const params: any[] = [id, status];
     let paramCount = 3;
 
@@ -202,43 +295,113 @@ export class OrderService {
       params.push(details.expiresAt);
     }
 
-    await query(
-      `UPDATE orders SET ${fields.join(', ')} WHERE id = $1`,
-      params
-    );
+    await query(`UPDATE orders SET ${fields.join(", ")} WHERE id = $1`, params);
   }
 
   async updateOrderExpiration(id: string, expirationDate: Date): Promise<void> {
-    await query(
-      'UPDATE orders SET expiration_date = $2 WHERE id = $1',
-      [id, expirationDate]
-    );
+    await query("UPDATE orders SET expiration_date = $2 WHERE id = $1", [
+      id,
+      expirationDate,
+    ]);
   }
 
   async updateOrderQuantity(id: string, quantity: number): Promise<void> {
     if (!Number.isInteger(quantity) || quantity < 1) {
-      throw new Error('Quantity must be a positive integer');
+      throw new Error("Quantity must be a positive integer");
     }
     await query(
-      'UPDATE orders SET quantity = $2, updated_at = NOW() WHERE id = $1',
-      [id, quantity]
+      "UPDATE orders SET quantity = $2, updated_at = NOW() WHERE id = $1",
+      [id, quantity],
     );
   }
 
   async updateOrderLimitPrice(id: string, limitPrice: number): Promise<void> {
-    if (typeof limitPrice !== 'number' || !Number.isFinite(limitPrice) || limitPrice < 0) {
-      throw new Error('Limit price must be a non-negative number');
+    if (
+      typeof limitPrice !== "number" ||
+      !Number.isFinite(limitPrice) ||
+      limitPrice < 0
+    ) {
+      throw new Error("Limit price must be a non-negative number");
     }
     await query(
-      'UPDATE orders SET limit_price = $2, updated_at = NOW() WHERE id = $1',
-      [id, limitPrice]
+      "UPDATE orders SET limit_price = $2, updated_at = NOW() WHERE id = $1",
+      [id, limitPrice],
     );
+  }
+
+  async updateOrderOnlyFillOnce(id: string, value: boolean): Promise<void> {
+    await query(
+      "UPDATE orders SET only_fill_once = $2, updated_at = NOW() WHERE id = $1",
+      [id, value],
+    );
+  }
+
+  async updateOrderFilledQuantity(
+    id: string,
+    filledQuantity: number,
+  ): Promise<void> {
+    await query(
+      "UPDATE orders SET filled_quantity = $2, updated_at = NOW() WHERE id = $1",
+      [id, filledQuantity],
+    );
+  }
+
+  /**
+   * Cancel future scheduled clones in a lineage (same parent_id), excluding
+   * the order that just filled. Used when onlyFillOnce orders fill.
+   * Returns the IDs that were cancelled.
+   */
+  async cancelClonesInLineage(
+    parentId: string,
+    exceptId: string,
+  ): Promise<string[]> {
+    const result = await query<{ id: string }>(
+      `UPDATE orders
+         SET status = 'CANCELLED',
+             cancelled_at = NOW(),
+             updated_at = NOW()
+       WHERE parent_id = $1
+         AND id <> $2
+         AND status IN ('SCHEDULED', 'PENDING', 'PAUSED')
+       RETURNING id`,
+      [parentId, exceptId],
+    );
+    return result.rows.map((r) => r.id);
+  }
+
+  /**
+   * Find the next SCHEDULED clone in a lineage (other than `exceptId`) and
+   * shrink its quantity to `newQuantity`. Used when onlyFillOnce orders
+   * partially fill: tomorrow's clone picks up the unfilled remainder.
+   * Returns the updated clone's id, or null when no future clone exists.
+   */
+  async updateNextCloneQuantity(
+    parentId: string,
+    exceptId: string,
+    newQuantity: number,
+  ): Promise<string | null> {
+    if (!Number.isInteger(newQuantity) || newQuantity < 1) return null;
+    const result = await query<{ id: string }>(
+      `UPDATE orders
+         SET quantity = $3, updated_at = NOW()
+       WHERE id = (
+         SELECT id FROM orders
+         WHERE parent_id = $1
+           AND id <> $2
+           AND status IN ('SCHEDULED', 'PENDING')
+         ORDER BY scheduled_for ASC NULLS LAST, created_at ASC
+         LIMIT 1
+       )
+       RETURNING id`,
+      [parentId, exceptId, newQuantity],
+    );
+    return result.rows[0]?.id ?? null;
   }
 
   async incrementRetryCount(id: string): Promise<number> {
     const result = await query<{ retry_count: number }>(
-      'UPDATE orders SET retry_count = retry_count + 1 WHERE id = $1 RETURNING retry_count',
-      [id]
+      "UPDATE orders SET retry_count = retry_count + 1 WHERE id = $1 RETURNING retry_count",
+      [id],
     );
     return result.rows[0].retry_count;
   }
@@ -246,7 +409,7 @@ export class OrderService {
   async deleteOrder(id: string): Promise<void> {
     await query(
       "UPDATE orders SET status = 'DELETED', updated_at = NOW() WHERE id = $1",
-      [id]
+      [id],
     );
   }
 
@@ -256,7 +419,7 @@ export class OrderService {
        WHERE status = 'DELETED'
        ORDER BY updated_at DESC
        LIMIT $1`,
-      [limit]
+      [limit],
     );
     return result.rows.map((row) => this.mapRowToOrder(row));
   }
@@ -264,25 +427,27 @@ export class OrderService {
   async restoreOrder(id: string): Promise<Order | null> {
     const result = await query<Order>(
       "UPDATE orders SET status = 'PENDING', updated_at = NOW() WHERE id = $1 AND status = 'DELETED' RETURNING *",
-      [id]
+      [id],
     );
     return result.rows.length > 0 ? this.mapRowToOrder(result.rows[0]) : null;
   }
 
   async permanentlyDeleteOrder(id: string): Promise<void> {
-    await query("DELETE FROM orders WHERE id = $1 AND status = 'DELETED'", [id]);
+    await query("DELETE FROM orders WHERE id = $1 AND status = 'DELETED'", [
+      id,
+    ]);
   }
 
   async pauseAllScheduled(): Promise<number> {
     const result = await query(
-      "UPDATE orders SET status = 'PAUSED', updated_at = NOW() WHERE status = 'SCHEDULED' RETURNING id"
+      "UPDATE orders SET status = 'PAUSED', updated_at = NOW() WHERE status = 'SCHEDULED' RETURNING id",
     );
     return result.rowCount ?? 0;
   }
 
   async resumeAllPaused(): Promise<number> {
     const result = await query(
-      "UPDATE orders SET status = 'SCHEDULED', updated_at = NOW() WHERE status = 'PAUSED' RETURNING id"
+      "UPDATE orders SET status = 'SCHEDULED', updated_at = NOW() WHERE status = 'PAUSED' RETURNING id",
     );
     return result.rowCount ?? 0;
   }
@@ -290,14 +455,14 @@ export class OrderService {
   async pauseOrder(id: string): Promise<void> {
     await query(
       "UPDATE orders SET status = 'PAUSED', updated_at = NOW() WHERE id = $1 AND status = 'SCHEDULED'",
-      [id]
+      [id],
     );
   }
 
   async resumeOrder(id: string): Promise<void> {
     await query(
       "UPDATE orders SET status = 'SCHEDULED', updated_at = NOW() WHERE id = $1 AND status = 'PAUSED'",
-      [id]
+      [id],
     );
   }
 
@@ -308,7 +473,7 @@ export class OrderService {
         `INSERT INTO scheduled_order_locks (order_id, scheduled_time, session_time, locked, locked_by, locked_at)
          VALUES ($1, NOW(), 'MARKET', false, NULL, NULL)
          ON CONFLICT (order_id) DO NOTHING`,
-        [orderId]
+        [orderId],
       );
 
       // Now try to acquire the lock
@@ -317,21 +482,21 @@ export class OrderService {
          SET locked = true, locked_by = $2, locked_at = NOW()
          WHERE order_id = $1 AND locked = false
          RETURNING order_id`,
-        [orderId, lockerId]
+        [orderId, lockerId],
       );
-      return result.rowCount > 0;
+      return (result.rowCount ?? 0) > 0;
     });
   }
 
   async releaseLock(orderId: string): Promise<void> {
     await query(
-      'UPDATE scheduled_order_locks SET locked = false, locked_by = NULL, locked_at = NULL WHERE order_id = $1',
-      [orderId]
+      "UPDATE scheduled_order_locks SET locked = false, locked_by = NULL, locked_at = NULL WHERE order_id = $1",
+      [orderId],
     );
   }
 
   async cleanupExpiredLocks(): Promise<void> {
-    await query('SELECT cleanup_expired_locks()');
+    await query("SELECT cleanup_expired_locks()");
   }
 
   async logExecution(
@@ -342,7 +507,7 @@ export class OrderService {
       filledQuantity?: number;
       averagePrice?: number;
       errorMessage?: string;
-    }
+    },
   ): Promise<void> {
     await query(
       `INSERT INTO order_executions (
@@ -355,21 +520,21 @@ export class OrderService {
         details?.filledQuantity,
         details?.averagePrice,
         details?.errorMessage,
-      ]
+      ],
     );
   }
 
   private async createScheduleLock(
     orderId: string,
     scheduledTime: Date,
-    sessionTime: SessionTime
+    sessionTime: SessionTime,
   ): Promise<void> {
     await query(
       `INSERT INTO scheduled_order_locks (order_id, scheduled_time, session_time)
        VALUES ($1, $2, $3)
        ON CONFLICT (order_id) DO UPDATE
        SET scheduled_time = $2, session_time = $3`,
-      [orderId, scheduledTime, sessionTime]
+      [orderId, scheduledTime, sessionTime],
     );
   }
 
@@ -385,7 +550,7 @@ export class OrderService {
        AND expiration_date IS NOT NULL
        AND status IN ('PENDING', 'SCHEDULED', 'PAUSED')
        AND (expiration_date::date + INTERVAL '20 hours') AT TIME ZONE 'America/New_York' < NOW()
-       ORDER BY expiration_date ASC`
+       ORDER BY expiration_date ASC`,
     );
     return result.rows.map((row) => this.mapRowToOrder(row));
   }
@@ -395,7 +560,7 @@ export class OrderService {
       `SELECT * FROM orders
        WHERE threshold_enabled = true
        AND status IN ('PENDING', 'SCHEDULED', 'PAUSED')
-       ORDER BY created_at ASC`
+       ORDER BY created_at ASC`,
     );
     return result.rows.map((row) => this.mapRowToOrder(row));
   }
@@ -406,14 +571,61 @@ export class OrderService {
        WHERE sell_order_enabled = true
        AND sell_order_triggered_by_order_id = $1
        AND status IN ('PENDING', 'SCHEDULED', 'PAUSED')`,
-      [buyOrderId]
+      [buyOrderId],
     );
     return result.rows.map((row) => this.mapRowToOrder(row));
+  }
+
+  /**
+   * Slice 6.3: re-queue orders that were parked at PAUSED with the
+   * sentinel lastError "queued for auth recovery". Called from the
+   * auth-restored code paths (renewAccessToken success and
+   * completeAutoAuthSession success). Returns the IDs that were flipped
+   * back to SCHEDULED so callers can broadcast targeted order_update
+   * events if they want.
+   */
+  async requeueAfterAuthRestore(): Promise<string[]> {
+    // For recurring orders whose scheduled_for is >1h stale, advance to
+    // tomorrow instead of firing a catch-up burst. Non-recurring or
+    // recent orders requeue normally.
+    const staleThreshold = new Date(Date.now() - 60 * 60_000);
+    const staleResult = await query<{ id: string }>(
+      `UPDATE orders
+         SET status = 'SCHEDULED',
+             last_error = NULL,
+             scheduled_for = (scheduled_for + INTERVAL '1 day'),
+             updated_at = NOW()
+       WHERE status = 'PAUSED'
+         AND last_error = 'queued for auth recovery'
+         AND schedule_enabled = true
+         AND schedule_once = false
+         AND scheduled_for < $1
+       RETURNING id`,
+      [staleThreshold],
+    );
+    if (staleResult.rows.length > 0) {
+      console.log(
+        `[auth-restore] skipped catch-up for ${staleResult.rows.length} stale recurring order(s), advanced to next day`,
+      );
+    }
+
+    // Requeue the rest (recent orders, one-shot orders) normally
+    const result = await query<{ id: string }>(
+      `UPDATE orders
+         SET status = 'SCHEDULED', last_error = NULL, updated_at = NOW()
+       WHERE status = 'PAUSED' AND last_error = 'queued for auth recovery'
+       RETURNING id`,
+    );
+    return [
+      ...staleResult.rows.map((r) => r.id),
+      ...result.rows.map((r) => r.id),
+    ];
   }
 
   private mapRowToOrder(row: any): Order {
     return {
       id: row.id,
+      parentId: row.parent_id,
       accountId: row.account_id,
       symbol: row.symbol,
       securityType: row.security_type,
@@ -432,25 +644,32 @@ export class OrderService {
       sessionTime: row.session_time,
       scheduledFor: row.scheduled_for,
       scheduleEnabled: row.schedule_enabled,
-      scheduleFrequency: row.schedule_frequency ?? 'DAILY',
+      scheduleFrequency: row.schedule_frequency ?? "DAILY",
       scheduleOnce: row.schedule_once ?? false,
+      onlyFillOnce: row.only_fill_once ?? true,
       status: row.status,
       etradeOrderId: row.etrade_order_id,
       submittedAt: row.submitted_at,
       filledAt: row.filled_at,
       cancelledAt: row.cancelled_at,
       expiresAt: row.expires_at,
+      filledQuantity:
+        row.filled_quantity != null ? Number(row.filled_quantity) : undefined,
       lastError: row.last_error,
       retryCount: row.retry_count,
       maxRetries: row.max_retries,
       thresholdEnabled: row.threshold_enabled ?? false,
-      thresholdPrice: row.threshold_price ? parseFloat(row.threshold_price) : undefined,
+      thresholdPrice: row.threshold_price
+        ? parseFloat(row.threshold_price)
+        : undefined,
       thresholdPriceSource: row.threshold_price_source,
       thresholdQuantity: row.threshold_quantity,
       thresholdPollIntervalMs: row.threshold_poll_interval_ms ?? 1000,
       thresholdLogFile: row.threshold_log_file,
       sellOrderEnabled: row.sell_order_enabled ?? false,
-      sellOrderThresholdPrice: row.sell_order_threshold_price ? parseFloat(row.sell_order_threshold_price) : undefined,
+      sellOrderThresholdPrice: row.sell_order_threshold_price
+        ? parseFloat(row.sell_order_threshold_price)
+        : undefined,
       sellOrderThresholdPriceSource: row.sell_order_threshold_price_source,
       sellOrderQuantity: row.sell_order_quantity,
       sellOrderTriggeredByOrderId: row.sell_order_triggered_by_order_id,

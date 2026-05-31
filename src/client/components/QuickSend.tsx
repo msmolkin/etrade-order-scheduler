@@ -1,841 +1,1133 @@
-import React, { useState, useEffect, useRef } from 'react';
+/**
+ * Slice 5.1 — Quick Send rewrite.
+ *
+ * Brief §3.4: a single screen, no modal stack. Two-column CSS grid.
+ *   Left column: form (symbol, qty, order type, side, "Fire when").
+ *   Right column: live confirm card (side · qty · symbol · type · session ·
+ *                  bid/ask · est cost · margin used) + big Place order button.
+ *
+ * One confirmation only — the card itself is the confirmation. Enter submits
+ * (when valid), ESC clears the form. We do not auto-submit on focus changes.
+ *
+ * The underlying API still does preview-then-submit (createOrder ->
+ * submitOrder) for "Now"; for scheduled fires we just create with
+ * scheduleEnabled=true and a calculated scheduledFor timestamp.
+ */
+import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useAccounts } from "../hooks/useAccounts";
+import { useQuote, type Quote } from "../hooks/useQuote";
+import { useCreateOrder } from "../hooks/useCreateOrder";
+import { useSubmitOrder } from "../hooks/useOrderMutations";
 import {
-  createOrder,
-  fetchAccounts,
-  fetchQuote,
-  submitOrder,
-  type TradingAccount,
-} from '../utils/api';
-import {
-  getHistoryItemLabel,
   type OrderHistoryItem,
   type OrderHistoryDraft,
-} from '../utils/orderHistory';
+} from "../utils/orderHistory";
 
-/**
- * Default maximum notional value (in USD) used to auto-calculate the order
- * quantity.  Adjust this to match your account size / risk tolerance.
- */
-const DEFAULT_MAX_NOTIONAL = 50000;
+type Side = "BUY" | "SELL" | "SELL_SHORT" | "BUY_TO_COVER";
+type OrderType = "MARKET" | "LIMIT" | "STOP";
+type FireWhen = "now" | "in2" | "open" | "custom";
+type PriceMode = "auto" | "bid" | "ask" | "last";
 
 interface QuickSendProps {
   orderHistory: OrderHistoryItem[];
   onOrderSent?: (draft: OrderHistoryDraft) => void;
 }
 
-type SessionMode = 'HIDDEN' | 'EXTENDED' | 'NONE';
+const SIDE_OPTIONS: { value: Side; label: string }[] = [
+  { value: "BUY", label: "BUY" },
+  { value: "SELL", label: "SELL" },
+  { value: "SELL_SHORT", label: "SHORT" },
+  { value: "BUY_TO_COVER", label: "COVER" },
+];
 
-interface QuoteData {
-  bid: number;
-  ask: number;
-  last: number;
-}
+const FIRE_OPTIONS: { value: FireWhen; label: string }[] = [
+  { value: "now", label: "Now" },
+  { value: "in2", label: "In 2 min" },
+  { value: "open", label: "Market open (9:30)" },
+  { value: "custom", label: "Custom..." },
+];
 
-export default function QuickSend({ orderHistory, onOrderSent }: QuickSendProps) {
-  /* ── Form state ─────────────────────────────────────────────── */
-  const [ticker, setTicker] = useState('');
-  const [action, setAction] = useState<'BUY' | 'SELL' | null>(null);
-  const [priceType, setPriceType] = useState<'BID' | 'ASK' | null>(null);
-  const [session, setSession] = useState<SessionMode>('EXTENDED');
-  const [quantity, setQuantity] = useState<number | ''>(100);
-  const [accountId, setAccountId] = useState('');
+/* ------------------------------------------------------------------ */
+/* Time helpers                                                       */
+/* ------------------------------------------------------------------ */
 
-  /* ── Quote ──────────────────────────────────────────────────── */
-  const [quote, setQuote] = useState<QuoteData | null>(null);
-  const [quoteLoading, setQuoteLoading] = useState(false);
-  const [quoteError, setQuoteError] = useState('');
+/**
+ * Next "Market open" 9:30 ET. If now is before 9:30 ET on a weekday, return
+ * today; otherwise return the next weekday's 9:30 ET.
+ */
+function nextMarketOpenET(now: Date = new Date()): Date {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const parts = fmt
+    .formatToParts(now)
+    .reduce<Record<string, string>>((acc, p) => {
+      if (p.type !== "literal") acc[p.type] = p.value;
+      return acc;
+    }, {});
+  const year = parseInt(parts.year, 10);
+  const month = parseInt(parts.month, 10);
+  const day = parseInt(parts.day, 10);
+  const hh = parseInt(parts.hour, 10);
+  const mm = parseInt(parts.minute, 10);
 
-  /* ── Accounts ───────────────────────────────────────────────── */
-  const [accounts, setAccounts] = useState<TradingAccount[]>([]);
-  const [accountsLoading, setAccountsLoading] = useState(false);
-  const [accountsError, setAccountsError] = useState('');
+  const targetMinutes = 9 * 60 + 30;
+  const nowETMinutes = hh * 60 + mm;
 
-  /* ── Submission ─────────────────────────────────────────────── */
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
-
-  /* ── History menu ───────────────────────────────────────────── */
-  const [historyMenuOpen, setHistoryMenuOpen] = useState(false);
-  const historyMenuRef = useRef<HTMLDivElement>(null);
-
-  /* ── Track whether the user manually edited qty ─────────────── */
-  const [qtyManuallySet, setQtyManuallySet] = useState(false);
-
-  /* ── Track whether the user changed bid/ask manually ─────────── */
-  const [priceTypeManuallySet, setPriceTypeManuallySet] = useState<boolean>(false);
-
-  /* ================================================================
-   * Load accounts on mount
-   * ============================================================= */
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setAccountsLoading(true);
-        setAccountsError('');
-        const storedKey =
-          typeof window !== 'undefined'
-            ? window.localStorage.getItem('selectedAccountIdKey')
-            : null;
-        const { accounts: fetched, defaultAccountIdKey } = await fetchAccounts();
-        setAccounts(fetched);
-        const initial =
-          storedKey && fetched.some((a) => a.accountIdKey === storedKey)
-            ? storedKey
-            : defaultAccountIdKey;
-        if (initial) setAccountId(initial);
-      } catch (err: any) {
-        setAccountsError(err.message || 'Failed to load accounts');
-      } finally {
-        setAccountsLoading(false);
-      }
-    };
-    load();
-  }, []);
-
-  /* ================================================================
-   * Fetch quote when ticker changes (debounced 400ms)
-   * ============================================================= */
-  useEffect(() => {
-    const sym = ticker.trim().toUpperCase();
-    if (!sym) {
-      setQuote(null);
-      setQuoteError('');
-      setQuoteLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setQuoteLoading(true);
-    setQuoteError('');
-
-    const timeout = setTimeout(async () => {
-      try {
-        const quotes = await fetchQuote([sym]);
-        if (cancelled) return;
-        const raw = Array.isArray(quotes) ? quotes[0] : quotes;
-        if (!raw) {
-          setQuoteError('No quote data returned');
-          setQuote(null);
-          return;
-        }
-        // Server normalizes to top-level bid/ask/last; support raw E*TRADE shape (data in .All) as fallback
-        const q = raw.All ?? raw;
-        const bid = typeof q.bid === 'number' ? q.bid : 0;
-        const ask = typeof q.ask === 'number' ? q.ask : 0;
-        const lastTrade = typeof q.lastTrade === 'number' ? q.lastTrade : 0;
-        const lastNum = typeof q.last === 'number' ? q.last : 0;
-        const last = lastTrade || lastNum || (bid && ask ? (bid + ask) / 2 : bid || ask || 0);
-        setQuote({ bid, ask, last });
-      } catch (err: any) {
-        if (!cancelled) {
-          setQuoteError(err.message || 'Failed to fetch quote');
-          setQuote(null);
-        }
-      } finally {
-        if (!cancelled) setQuoteLoading(false);
-      }
-    }, 400);
-
-    return () => {
-      cancelled = true;
-      clearTimeout(timeout);
-    };
-  }, [ticker]);
-
-  /* ================================================================
-   * Update default quantity when quote changes (unless user edited)
-   * ============================================================= */
-  useEffect(() => {
-    if (qtyManuallySet) return;
-    if (!quote || quote.last <= 0) {
-      setQuantity(100);
-      return;
-    }
-    const maxByPrice = Math.floor(DEFAULT_MAX_NOTIONAL / quote.last);
-    setQuantity(Math.min(100, Math.max(1, maxByPrice)));
-  }, [quote, qtyManuallySet]);
-
-  /* ================================================================
-   * Default price type when buy/sell is selected (if not manually set)
-   * Buy → BID, Sell → ASK. Only apply when we have a quote.
-   * ============================================================= */
-  useEffect(() => {
-    if (priceTypeManuallySet || !action || !quote) return;
-    setPriceType(action === 'BUY' ? 'BID' : 'ASK');
-  }, [action, quote, priceTypeManuallySet]);
-
-  /* ================================================================
-   * Close history menu on outside click
-   * ============================================================= */
-  useEffect(() => {
-    if (!historyMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (
-        historyMenuRef.current &&
-        !historyMenuRef.current.contains(e.target as Node)
-      ) {
-        setHistoryMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [historyMenuOpen]);
-
-  /* ================================================================
-   * Handlers
-   * ============================================================= */
-
-  const handleSelectHistory = (item: OrderHistoryItem) => {
-    const d = item.draft;
-    if (d.symbol) setTicker(d.symbol.toUpperCase());
-    if (d.action === 'BUY' || d.action === 'BUY_TO_COVER') setAction('BUY');
-    else if (d.action === 'SELL' || d.action === 'SELL_SHORT') setAction('SELL');
-    if (d.quantity) {
-      setQuantity(d.quantity);
-      setQtyManuallySet(true);
-    }
-    setPriceTypeManuallySet(false);
-    setPriceType(null);
-    setHistoryMenuOpen(false);
-    setError('');
-    setSuccessMessage('');
-  };
-
-  const handleRefreshQuote = async () => {
-    const sym = ticker.trim().toUpperCase();
-    if (!sym) return;
-    setQuoteLoading(true);
-    setQuoteError('');
-    try {
-      const quotes = await fetchQuote([sym]);
-      const raw = Array.isArray(quotes) ? quotes[0] : quotes;
-      if (!raw) {
-        setQuoteError('No quote data returned');
-        setQuote(null);
-        return;
-      }
-      const q = raw.All ?? raw;
-      const bid = typeof q.bid === 'number' ? q.bid : 0;
-      const ask = typeof q.ask === 'number' ? q.ask : 0;
-      const lastTrade = typeof q.lastTrade === 'number' ? q.lastTrade : 0;
-      const lastNum = typeof q.last === 'number' ? q.last : 0;
-      const last = lastTrade || lastNum || (bid && ask ? (bid + ask) / 2 : bid || ask || 0);
-      setQuote({ bid, ask, last });
-    } catch (err: any) {
-      setQuoteError(err.message || 'Failed to fetch quote');
-      setQuote(null);
-    } finally {
-      setQuoteLoading(false);
-    }
-  };
-
-  /* ── Computed values ────────────────────────────────────────── */
-
-  const limitPrice =
-    priceType && quote
-      ? priceType === 'BID'
-        ? quote.bid
-        : quote.ask
-      : null;
-
-  const sessionTimeValue: string =
-    session === 'NONE' ? 'MARKET' : 'EXTENDED';
-
-  const isReady =
-    !!action &&
-    !!ticker.trim() &&
-    !!priceType &&
-    limitPrice != null &&
-    limitPrice > 0 &&
-    !!quantity &&
-    !!accountId;
-
-  /* ── Preview helpers ────────────────────────────────────────── */
-
-  const buildPreview = (): string => {
-    if (!action || !ticker.trim() || !priceType || limitPrice == null || !quantity)
-      return '';
-    const sessionLabel =
-      session === 'EXTENDED'
-        ? 'EXT'
-        : session === 'HIDDEN'
-          ? 'HIDDEN'
-          : 'REG';
-    return [
-      action,
-      quantity,
-      ticker.trim().toUpperCase(),
-      '@',
-      `$${limitPrice.toFixed(2)}`,
-      `(${priceType.toLowerCase()})`,
-      'LIMIT',
-      sessionLabel,
-    ].join(' ');
-  };
-
-  const buildCommandPreview = (): string => {
-    if (!action || !ticker.trim() || !priceType || limitPrice == null || !quantity)
-      return '';
-
-    const payload: Record<string, unknown> = {
-      accountId,
-      symbol: ticker.trim().toUpperCase(),
-      securityType: 'EQUITY',
-      action,
-      orderType: 'LIMIT',
-      quantity: typeof quantity === 'number' ? quantity : parseInt(String(quantity)),
-      limitPrice: parseFloat(limitPrice.toFixed(2)),
-      actualDuration: 'DAY',
-      preferredDuration: 'DAY',
-      sessionTime: sessionTimeValue,
-      scheduleEnabled: false,
-      status: 'PENDING',
-      retryCount: 0,
-      maxRetries: 3,
-    };
-    if (session === 'HIDDEN') {
-      payload.notes = 'HIDDEN order';
-    }
-
-    return (
-      `POST /api/orders\n` +
-      JSON.stringify(payload, null, 2) +
-      `\n\nthen POST /api/orders/{id}/submit`
-    );
-  };
-
-  /* ── Send order ─────────────────────────────────────────────── */
-
-  const handleSend = async () => {
-    if (
-      !action ||
-      !ticker.trim() ||
-      !priceType ||
-      limitPrice == null ||
-      !quantity ||
-      !accountId
-    ) {
-      setError(
-        'Please fill in all fields (ticker, action, price, quantity, account)'
-      );
-      return;
-    }
-
-    setError('');
-    setSuccessMessage('');
-    setSending(true);
-
-    try {
-      const orderPayload: Record<string, unknown> = {
-        accountId,
-        symbol: ticker.trim().toUpperCase(),
-        securityType: 'EQUITY',
-        action,
-        orderType: 'LIMIT',
-        quantity:
-          typeof quantity === 'number' ? quantity : parseInt(String(quantity)),
-        limitPrice: parseFloat(limitPrice.toFixed(2)),
-        actualDuration: 'DAY',
-        preferredDuration: 'DAY',
-        sessionTime: sessionTimeValue,
-        scheduleEnabled: false,
-        status: 'PENDING',
-        retryCount: 0,
-        maxRetries: 3,
-      };
-      if (session === 'HIDDEN') {
-        orderPayload.notes = 'HIDDEN order';
-      }
-
-      const created = await createOrder(orderPayload);
-      const result = await submitOrder(created.id);
-
-      if (!result.success) {
-        throw new Error(
-          result.order?.lastError || 'Order submission failed'
-        );
-      }
-
-      setSuccessMessage(
-        `Order sent! E*TRADE Order ID: ${result.order.etradeOrderId || 'Pending'}`
-      );
-
-      onOrderSent?.({
-        accountId,
-        symbol: ticker.trim().toUpperCase(),
-        securityType: 'EQUITY',
-        action,
-        orderType: 'LIMIT',
-        quantity:
-          typeof quantity === 'number' ? quantity : parseInt(String(quantity)),
-        limitPrice: limitPrice.toFixed(2),
-        sessionTime: sessionTimeValue,
-      });
-
-      /* Reset selection (keep ticker & account) */
-      setAction(null);
-      setPriceType(null);
-    } catch (err: any) {
-      setError(err.message || 'Failed to send order');
-    } finally {
-      setSending(false);
-    }
-  };
-
-  /* ── Filter history to stock orders ─────────────────────────── */
-  const stockHistory = orderHistory.filter(
-    (h) => !h.draft.securityType || h.draft.securityType === 'EQUITY'
+  // Construct UTC instant equal to today 09:30 ET.
+  const offsetMs = guessETOffsetMs(now);
+  const todayOpen = new Date(
+    Date.UTC(year, month - 1, day, 9, 30, 0) - offsetMs,
   );
 
-  /* ================================================================
-   * RENDER
-   * ============================================================= */
+  const isWeekend = (d: Date): boolean => {
+    const wd = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      weekday: "short",
+    }).format(d);
+    return wd === "Sat" || wd === "Sun";
+  };
+
+  let target = todayOpen;
+  if (nowETMinutes >= targetMinutes || isWeekend(target)) {
+    do {
+      target = new Date(target.getTime() + 24 * 60 * 60_000);
+    } while (isWeekend(target));
+  }
+  return target;
+}
+
+/**
+ * Approximate the ET offset (EST = -300, EDT = -240) by reading the formatter
+ * shortOffset, e.g. "GMT-5". Off by a few hours during the DST transition
+ * window which is fine for the UI label; server confirms exact time.
+ */
+function guessETOffsetMs(now: Date): number {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    timeZoneName: "shortOffset",
+  });
+  const tz =
+    fmt.formatToParts(now).find((p) => p.type === "timeZoneName")?.value ??
+    "GMT-5";
+  const m = tz.match(/GMT([+-])(\d{1,2})/);
+  if (!m) return -5 * 60 * 60_000;
+  const sign = m[1] === "+" ? 1 : -1;
+  const hours = parseInt(m[2], 10);
+  return sign * hours * 60 * 60_000;
+}
+
+function plusMinutes(date: Date, minutes: number): Date {
+  return new Date(date.getTime() + minutes * 60_000);
+}
+
+function formatScheduledForISO(d: Date): string {
+  return d.toISOString();
+}
+
+function formatHumanET(d: Date): string {
+  return d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function toLocalDateTimeInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/* ------------------------------------------------------------------ */
+/* Component                                                          */
+/* ------------------------------------------------------------------ */
+
+export default function QuickSend({
+  orderHistory: _orderHistory,
+  onOrderSent,
+}: QuickSendProps) {
+  const [symbol, setSymbol] = useState("");
+  const [quantity, setQuantity] = useState<number | "">(100);
+  const [orderType, setOrderType] = useState<OrderType>("LIMIT");
+  const [stopPrice, setStopPrice] = useState<string>("");
+  const [side, setSide] = useState<Side>("BUY");
+  const [fireWhen, setFireWhen] = useState<FireWhen>("now");
+  const [customFire, setCustomFire] = useState<string>("");
+  const [accountId, setAccountId] = useState("");
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [priceMode, setPriceMode] = useState<PriceMode>("auto");
+
+  const symbolInputRef = useRef<HTMLInputElement>(null);
+  const lastLimitPrice = useRef<number | null>(null);
+  const [lastOrderId, setLastOrderId] = useState<string | null>(null);
+  const [lastEtradeId, setLastEtradeId] = useState<string | null>(null);
+  const isNarrow = useMediaQuery("(max-width: 720px)");
+
+  /* Accounts ------------------------------------------------------- */
+  const accountsQuery = useAccounts();
+  const accounts = accountsQuery.data?.accounts ?? [];
+  const defaultAccountIdKey = accountsQuery.data?.defaultAccountIdKey ?? null;
+
+  useEffect(() => {
+    if (accountId || accounts.length === 0) return;
+    const stored =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("selectedAccountIdKey")
+        : null;
+    const initial =
+      stored && accounts.some((a) => a.accountIdKey === stored)
+        ? stored
+        : (defaultAccountIdKey ?? accounts[0]?.accountIdKey ?? "");
+    if (initial) setAccountId(initial);
+  }, [accounts, accountId, defaultAccountIdKey]);
+
+  /* Quote --------------------------------------------------------- */
+  const quoteQuery = useQuote(symbol, true);
+  const quote: Quote | null = quoteQuery.data ?? null;
+
+  /* Mutations ----------------------------------------------------- */
+  const createMut = useCreateOrder();
+  const submitMut = useSubmitOrder();
+  const placing = createMut.isPending || submitMut.isPending;
+
+  /* Derived ------------------------------------------------------- */
+  const limitPrice = useMemo(() => {
+    if (!quote) return null;
+    if (priceMode === "bid") return quote.bid || null;
+    if (priceMode === "ask") return quote.ask || null;
+    if (priceMode === "last") return quote.last || null;
+    if (side === "BUY" || side === "BUY_TO_COVER")
+      return quote.ask || quote.last;
+    return quote.bid || quote.last;
+  }, [quote, side, priceMode]);
+
+  const estCost = useMemo(() => {
+    if (!quantity || !quote) return null;
+    const px =
+      orderType === "MARKET"
+        ? side === "BUY" || side === "BUY_TO_COVER"
+          ? quote.ask
+          : quote.bid
+        : (limitPrice ?? quote.last);
+    if (!px) return null;
+    return Number(quantity) * px;
+  }, [quantity, quote, orderType, side, limitPrice]);
+
+  const marginUsed = useMemo(() => {
+    if (estCost == null) return null;
+    const ratio = side === "SELL_SHORT" ? 0.5 : 1.0;
+    return estCost * ratio;
+  }, [estCost, side]);
+
+  const fireDate: Date | null = useMemo(() => {
+    if (fireWhen === "now") return null;
+    if (fireWhen === "in2") return plusMinutes(new Date(), 2);
+    if (fireWhen === "open") return nextMarketOpenET();
+    if (fireWhen === "custom" && customFire) {
+      const d = new Date(customFire);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+    return null;
+  }, [fireWhen, customFire]);
+
+  const sessionLabel = useMemo(() => {
+    if (fireWhen === "open") return "MARKET";
+    return "EXTENDED";
+  }, [fireWhen]);
+
+  const isReady =
+    !!accountId &&
+    !!symbol.trim() &&
+    !!quantity &&
+    Number(quantity) > 0 &&
+    (orderType === "MARKET" || (orderType === "STOP" && stopPrice && Number(stopPrice) > 0) || (orderType === "LIMIT" && limitPrice != null && limitPrice > 0)) &&
+    (fireWhen !== "custom" || !!fireDate);
+
+  /* Handlers ------------------------------------------------------ */
+  // Previously reset qty to 100, side to BUY, and order type to LIMIT.
+  // Now keeps symbol, side, and quantity so repeated orders are faster.
+  const reset = (keepSymbol = true) => {
+    if (!keepSymbol) setSymbol("");
+    setOrderType("LIMIT");
+    setStopPrice("");
+    setFireWhen("now");
+    setCustomFire("");
+    setPriceMode("auto");
+    setError("");
+  };
+
+  const handlePriceModeClick = (mode: "bid" | "ask" | "last") => {
+    if (orderType === "MARKET") setOrderType("LIMIT");
+    setPriceMode((prev) => {
+      if (prev === mode) { quoteQuery.refetch(); return "auto"; }
+      return mode;
+    });
+  };
+
+  const pollOrderStatus = (orderId: string, etradeId: string) => {
+    const API = import.meta.env.VITE_API_URL || "/api";
+    let attempts = 0;
+    const maxAttempts = 10;
+    const iv = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await fetch(`${API}/orders/${orderId}/verify`, {
+          method: "POST",
+        });
+        if (!res.ok) {
+          clearInterval(iv);
+          return;
+        }
+        const order = await res.json();
+        const st = order.status;
+        if (st === "SUBMITTED") {
+          const pxInfo = order.limitPrice ? `Limit $${Number(order.limitPrice).toFixed(2)}` : order.orderType ?? "Market";
+          setSuccess(`E*TRADE id ${etradeId}\nOPEN ${pxInfo}\naccepted, awaiting fill`);
+          clearInterval(iv);
+        } else if (st === "FILLED" || st === "PARTIALLY_FILLED") {
+          const qty = order.filledQuantity ?? order.quantity;
+          const px = order.filledPrice ?? order.limitPrice ?? lastLimitPrice.current;
+          const comm = order.commission;
+          const pxStr = px ? `@ $${Number(px).toFixed(2)}` : "";
+          const commStr = comm ? ` + $${Number(comm).toFixed(2)} comm` : "";
+          setSuccess(`E*TRADE id ${etradeId}\nFILLED ${qty} shares ${pxStr}${commStr}`);
+          setLastOrderId(null);
+          setLastEtradeId(null);
+          clearInterval(iv);
+        } else if (st === "REJECTED") {
+          setError(
+            `E*TRADE id ${etradeId}\nREJECTED\n${order.lastError ?? "unknown reason"}`,
+          );
+          setLastOrderId(null);
+          setSuccess("");
+          clearInterval(iv);
+        } else if (st === "CANCELLED" || st === "EXPIRED") {
+          setSuccess(`E*TRADE id ${etradeId}\n${st}`);
+          setLastOrderId(null);
+          setLastEtradeId(null);
+          clearInterval(iv);
+        } else if (attempts >= maxAttempts) {
+          const spInfo = order.limitPrice ? `Limit $${Number(order.limitPrice).toFixed(2)}` : order.orderType ?? "Market";
+          setSuccess(
+            `E*TRADE id ${etradeId}\n${st} ${spInfo}\nstopped auto-checking`,
+          );
+          clearInterval(iv);
+        }
+      } catch {
+        clearInterval(iv);
+      }
+    }, 2000);
+  };
+
+  const handlePlace = async () => {
+    if (!isReady || placing) return;
+    setError("");
+    setSuccess("");
+
+    const sym = symbol.trim().toUpperCase();
+    const qty = Number(quantity);
+    const px =
+      orderType === "LIMIT" && limitPrice
+        ? Number(limitPrice.toFixed(2))
+        : undefined;
+    const sp =
+      orderType === "STOP" && stopPrice
+        ? Number(Number(stopPrice).toFixed(2))
+        : undefined;
+
+    const isImmediate = fireWhen === "now";
+    const payload: Record<string, unknown> = {
+      accountId,
+      symbol: sym,
+      securityType: "EQUITY",
+      action: side,
+      orderType,
+      quantity: qty,
+      limitPrice: px,
+      stopPrice: sp,
+      actualDuration: "DAY",
+      preferredDuration: "DAY",
+      sessionTime: sessionLabel,
+      scheduleEnabled: !isImmediate,
+      scheduleOnce: !isImmediate,
+      scheduledFor:
+        !isImmediate && fireDate ? formatScheduledForISO(fireDate) : undefined,
+      status: isImmediate ? "PENDING" : "PAUSED",
+      retryCount: 0,
+      maxRetries: 3,
+      onlyFillOnce: true,
+    };
+
+    try {
+      const created = await createMut.mutateAsync(payload as any);
+      if (isImmediate) {
+        const result = await submitMut.mutateAsync(created.id);
+        if (!result.success) {
+          throw new Error(result.order?.lastError || "Order submission failed");
+        }
+        const eid = result.order.etradeOrderId ?? "pending";
+        lastLimitPrice.current = px ?? null;
+        setLastOrderId(created.id);
+        setLastEtradeId(eid);
+        const pxLabel = px ? `Limit $${px.toFixed(2)}` : sp ? `Stop $${sp.toFixed(2)}` : "Market";
+        setSuccess(`E*TRADE id ${eid}\n${pxLabel}\nchecking status…`);
+        pollOrderStatus(created.id, eid);
+      } else {
+        setSuccess(
+          `Saved paused for ${fireDate ? formatHumanET(fireDate) : "later"} ET`,
+        );
+      }
+      onOrderSent?.({
+        accountId,
+        symbol: sym,
+        securityType: "EQUITY",
+        action: side,
+        orderType,
+        quantity: qty,
+        limitPrice: px != null ? px.toFixed(2) : undefined,
+        sessionTime: sessionLabel,
+        scheduleEnabled: !isImmediate,
+        scheduleOnce: !isImmediate,
+        onlyFillOnce: true,
+      });
+      reset(true);
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to place order");
+    }
+  };
+
+  /* Keyboard: Enter submits, ESC clears. Only when focus is in our subtree. */
+  const handleFormKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (e) => {
+    const tag = (e.target as HTMLElement).tagName;
+    if (e.key === "Enter") {
+      if (tag === "TEXTAREA") return;
+      e.preventDefault();
+      void handlePlace();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      reset(false);
+      symbolInputRef.current?.focus();
+    }
+  };
+
+  /* Render -------------------------------------------------------- */
   return (
-    <div className="w-full max-w-lg mx-auto px-2">
-      {/* Backdrop when history menu is open */}
-      {historyMenuOpen && (
+    <div
+      onKeyDown={handleFormKeyDown}
+      style={{
+        display: "grid",
+        gridTemplateColumns: isNarrow
+          ? "minmax(0, 1fr)"
+          : "minmax(0, 1fr) minmax(320px, 420px)",
+        gap: isNarrow ? 16 : 24,
+        maxWidth: 980,
+        margin: "0 auto",
+        padding: "0 12px",
+      }}
+    >
+      {/* ── LEFT: form ────────────────────────────────────────────── */}
+      <div
+        style={{
+          background: "var(--bg-1)",
+          border: "1px solid var(--bg-3)",
+          borderRadius: 12,
+          padding: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 18,
+          order: isNarrow ? 2 : 1,
+        }}
+      >
         <div
-          className="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm"
-          aria-hidden="true"
-        />
-      )}
-
-      <h2 className="text-lg font-semibold text-white mb-4">Quick Send</h2>
-
-      {/* ─── Recent Orders dropdown ──────────────────────────────── */}
-      {stockHistory.length > 0 && (
-        <div className="relative mb-4" ref={historyMenuRef}>
-          <button
-            type="button"
-            onClick={() => setHistoryMenuOpen((v) => !v)}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-slate-800 border border-slate-600 text-slate-300 text-sm hover:bg-slate-700 hover:text-white transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+          }}
+        >
+          <h2
+            style={{
+              color: "var(--text)",
+              fontSize: 18,
+              fontWeight: 600,
+              margin: 0,
+            }}
           >
-            <span>Recent orders</span>
-            <span className="text-slate-500">({stockHistory.length})</span>
-            <svg
-              className={`w-4 h-4 transition-transform ${historyMenuOpen ? 'rotate-180' : ''}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M19 9l-7 7-7-7"
-              />
-            </svg>
-          </button>
-          {historyMenuOpen && (
-            <div
-              className="absolute left-0 right-0 mt-1 max-h-64 overflow-auto rounded-lg border border-slate-600 shadow-2xl shadow-black/70 z-50"
-              style={{ backgroundColor: '#020617', opacity: 1 }}
-            >
-              <div
-                className="sticky top-0 px-3 py-2 text-xs font-medium text-slate-300 border-b border-slate-700"
-                style={{ backgroundColor: '#020617' }}
-              >
-                Click to prefill Quick Send form
-              </div>
-              {stockHistory.map((item) => (
-                <div
-                  key={item.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => handleSelectHistory(item)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      handleSelectHistory(item);
-                    }
-                  }}
-                  className="flex items-center gap-2 px-3 py-2.5 text-left hover:bg-slate-800 text-slate-100 text-sm border-b border-slate-700 last:border-b-0 cursor-pointer outline-none focus-visible:bg-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500"
-                >
-                  <span className="truncate flex-1 min-w-0">
-                    {getHistoryItemLabel(item)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+            Quick Send
+          </h2>
+          <span style={{ color: "var(--text-dim)", fontSize: 11 }}>
+            ↵ to place · ESC to clear
+          </span>
         </div>
-      )}
 
-      {/* ─── Messages ────────────────────────────────────────────── */}
-      {error && (
-        <div className="mb-3 p-3 bg-red-500/20 border border-red-500 rounded-lg text-red-400 text-sm">
-          {error}
-        </div>
-      )}
-      {successMessage && (
-        <div className="mb-3 p-3 bg-green-500/20 border border-green-500 rounded-lg text-green-400 text-sm">
-          {successMessage}
-        </div>
-      )}
-      {accountsError && (
-        <div className="mb-3 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-200 text-xs">
-          {accountsError}. Enter an Account ID manually below.
-        </div>
-      )}
-
-      <div className="bg-slate-800 rounded-lg p-5 space-y-5">
-        {/* ─── Account ─────────────────────────────────────────────── */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            Account
-          </label>
-          {accountsLoading ? (
-            <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-slate-400 text-sm">
-              Loading...
-            </div>
-          ) : accounts.length > 0 ? (
+        {accounts.length > 1 && (
+          <Field label="Account">
             <select
               value={accountId}
               onChange={(e) => {
-                const value = e.target.value;
-                setAccountId(value);
-                if (typeof window !== 'undefined') {
-                  window.localStorage.setItem('selectedAccountIdKey', value);
+                const v = e.target.value;
+                setAccountId(v);
+                if (typeof window !== "undefined") {
+                  window.localStorage.setItem("selectedAccountIdKey", v);
                 }
               }}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+              style={selectStyle}
             >
-              <option value="" disabled>
-                Select account
-              </option>
               {accounts.map((a) => (
                 <option key={a.accountIdKey} value={a.accountIdKey}>
-                  {a.nickname} — {a.name || 'Unnamed'} ({a.type})
-                  {a.isDefaultFromEnv ? ' [.env]' : ''}
+                  {a.nickname} — {a.name || "Unnamed"} ({a.type})
                 </option>
               ))}
             </select>
-          ) : (
-            <input
-              type="text"
-              value={accountId}
-              onChange={(e) => setAccountId(e.target.value)}
-              placeholder="E*TRADE account key"
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-            />
-          )}
-        </div>
-
-        {/* ─── Ticker (BIG) ────────────────────────────────────────── */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            Ticker
-          </label>
-          <input
-            type="text"
-            value={ticker}
-            onChange={(e) => {
-              setTicker(e.target.value.toUpperCase());
-              setPriceTypeManuallySet(false);
-              setPriceType(null);
-              setQtyManuallySet(false);
-              setError('');
-              setSuccessMessage('');
-            }}
-            placeholder="XOM"
-            className="w-full px-4 py-4 bg-slate-700 border border-slate-600 rounded-lg text-white text-3xl font-bold text-center tracking-wider focus:outline-none focus:border-blue-500 uppercase placeholder:text-slate-500"
-          />
-          {quoteLoading && (
-            <p className="text-xs text-slate-400 mt-1 text-center">
-              Fetching quote...
-            </p>
-          )}
-          {quoteError && (
-            <p className="text-xs text-red-400 mt-1 text-center">
-              {quoteError}
-            </p>
-          )}
-          {quote && !quoteLoading && (
-            <div className="flex items-center justify-center gap-4 mt-2 text-xs text-slate-400">
-              <span>
-                Bid:{' '}
-                <span className="text-white font-medium">
-                  ${quote.bid.toFixed(2)}
-                </span>
-              </span>
-              <span>
-                Ask:{' '}
-                <span className="text-white font-medium">
-                  ${quote.ask.toFixed(2)}
-                </span>
-              </span>
-              <span>
-                Last:{' '}
-                <span className="text-white font-medium">
-                  ${quote.last.toFixed(2)}
-                </span>
-              </span>
-              <button
-                type="button"
-                onClick={handleRefreshQuote}
-                disabled={quoteLoading}
-                className="text-slate-400 hover:text-white transition-colors"
-                title="Refresh quote"
-              >
-                <svg
-                  className={`w-3.5 h-3.5 ${quoteLoading ? 'animate-spin' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                  />
-                </svg>
-              </button>
-            </div>
-          )}
-        </div>
-
-        {/* ─── Buy / Sell toggle ───────────────────────────────────── */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-2">
-            Action
-          </label>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setAction('BUY');
-                setPriceTypeManuallySet(false);
-                setPriceType(null);
-              }}
-              className={`flex-1 py-3 rounded-lg font-semibold text-lg transition-colors ${
-                action === 'BUY'
-                  ? 'bg-green-600 text-white ring-2 ring-green-400'
-                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-              }`}
-            >
-              BUY
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setAction('SELL');
-                setPriceTypeManuallySet(false);
-                setPriceType(null);
-              }}
-              className={`flex-1 py-3 rounded-lg font-semibold text-lg transition-colors ${
-                action === 'SELL'
-                  ? 'bg-red-600 text-white ring-2 ring-red-400'
-                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-              }`}
-            >
-              SELL
-            </button>
-          </div>
-        </div>
-
-        {/* ─── Price buttons (bid / ask) ───────────────────────────── */}
-        {action && quote && (
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-2">
-              Limit Price
-            </label>
-            {action === 'BUY' ? (
-              <div className="flex gap-2">
-                {/* Buy at Bid — "with market" (maker), bold */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPriceTypeManuallySet(true);
-                    setPriceType('BID');
-                  }}
-                  className={`flex-1 py-3 rounded-lg text-center transition-colors ${
-                    priceType === 'BID'
-                      ? 'bg-green-600 text-white ring-2 ring-green-400'
-                      : 'bg-green-900/40 text-green-300 hover:bg-green-800/40 border border-green-700'
-                  }`}
-                >
-                  <span className="font-bold text-sm">Buy at Bid</span>
-                  <br />
-                  <span className="text-xl font-bold">
-                    ${quote.bid.toFixed(2)}
-                  </span>
-                </button>
-                {/* Buy at Ask — taker, normal weight */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPriceTypeManuallySet(true);
-                    setPriceType('ASK');
-                  }}
-                  className={`flex-1 py-3 rounded-lg text-center transition-colors ${
-                    priceType === 'ASK'
-                      ? 'bg-green-600 text-white ring-2 ring-green-400'
-                      : 'bg-green-900/40 text-green-300 hover:bg-green-800/40 border border-green-700'
-                  }`}
-                >
-                  <span className="text-sm">Buy at Ask</span>
-                  <br />
-                  <span className="text-xl">${quote.ask.toFixed(2)}</span>
-                </button>
-              </div>
-            ) : (
-              <div className="flex gap-2">
-                {/* Sell at Bid — taker, normal weight */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPriceTypeManuallySet(true);
-                    setPriceType('BID');
-                  }}
-                  className={`flex-1 py-3 rounded-lg text-center transition-colors ${
-                    priceType === 'BID'
-                      ? 'bg-red-600 text-white ring-2 ring-red-400'
-                      : 'bg-red-900/40 text-red-300 hover:bg-red-800/40 border border-red-700'
-                  }`}
-                >
-                  <span className="text-sm">Sell at Bid</span>
-                  <br />
-                  <span className="text-xl">${quote.bid.toFixed(2)}</span>
-                </button>
-                {/* Sell at Ask — "with market" (maker), bold */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPriceTypeManuallySet(true);
-                    setPriceType('ASK');
-                  }}
-                  className={`flex-1 py-3 rounded-lg text-center transition-colors ${
-                    priceType === 'ASK'
-                      ? 'bg-red-600 text-white ring-2 ring-red-400'
-                      : 'bg-red-900/40 text-red-300 hover:bg-red-800/40 border border-red-700'
-                  }`}
-                >
-                  <span className="font-bold text-sm">Sell at Ask</span>
-                  <br />
-                  <span className="text-xl font-bold">
-                    ${quote.ask.toFixed(2)}
-                  </span>
-                </button>
-              </div>
-            )}
-          </div>
+          </Field>
         )}
 
-        {/* ─── Session mode ────────────────────────────────────────── */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-2">
-            Session
-          </label>
-          <div className="flex gap-4">
-            {(
-              [
-                { value: 'HIDDEN', label: 'Hidden' },
-                { value: 'EXTENDED', label: 'Extended (EXT)' },
-                { value: 'NONE', label: 'None (regular)' },
-              ] as { value: SessionMode; label: string }[]
-            ).map((opt) => (
-              <label
-                key={opt.value}
-                className="flex items-center gap-1.5 cursor-pointer"
+        <Field label="Symbol">
+          <input
+            ref={symbolInputRef}
+            type="text"
+            value={symbol}
+            autoCapitalize="characters"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            onChange={(e) => {
+              setSymbol(e.target.value.toUpperCase());
+              setError("");
+              setSuccess("");
+            }}
+            placeholder="AAPL"
+            autoFocus
+            style={{
+              ...inputStyle,
+              fontSize: 22,
+              fontWeight: 700,
+              letterSpacing: "0.04em",
+              textAlign: "center",
+            }}
+          />
+        </Field>
+
+        <Field label="Quantity">
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              value={quantity}
+              onChange={(e) => {
+                const raw = e.target.value;
+                if (raw === "") setQuantity("");
+                else setQuantity(Math.max(1, parseInt(raw, 10) || 1));
+              }}
+              style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+            />
+            {[10, 50, 100].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setQuantity(n)}
+                style={{
+                  padding: "8px 10px",
+                  borderRadius: 8,
+                  border: quantity === n ? "1px solid var(--info)" : "1px solid var(--bg-3)",
+                  background: quantity === n ? "color-mix(in oklab, var(--info) 18%, transparent)" : "var(--bg-2)",
+                  color: quantity === n ? "var(--info)" : "var(--text-dim)",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
               >
-                <input
-                  type="radio"
-                  name="quicksend-session"
-                  value={opt.value}
-                  checked={session === opt.value}
-                  onChange={() => setSession(opt.value)}
-                  className="accent-blue-500"
-                />
-                <span
-                  className={`text-sm ${
-                    session === opt.value ? 'text-white' : 'text-slate-400'
-                  }`}
-                >
-                  {opt.label}
-                </span>
-              </label>
+                {n}
+              </button>
             ))}
           </div>
-        </div>
+        </Field>
 
-        {/* ─── Quantity ────────────────────────────────────────────── */}
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            Quantity
-            {quote && quote.last > 0 && (
-              <span className="text-slate-500 font-normal ml-1">
-                (auto: min of 100 or ~
-                {Math.floor(DEFAULT_MAX_NOTIONAL / quote.last).toLocaleString()} shares
-                for ${(DEFAULT_MAX_NOTIONAL / 1000).toFixed(0)}k — adjust DEFAULT_MAX_NOTIONAL for your account size)
-              </span>
-            )}
-          </label>
-          <input
-            type="number"
-            min={1}
-            value={quantity}
-            onChange={(e) => {
-              const val = e.target.value;
-              setQtyManuallySet(true);
-              setQuantity(val === '' ? '' : Math.max(1, parseInt(val) || 1));
-            }}
-            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-          />
-        </div>
-
-        {/* ─── Preview ─────────────────────────────────────────────── */}
-        {isReady && (
-          <div className="border border-slate-600 rounded-lg p-3 bg-slate-900/80">
-            <div className="text-xs font-medium text-slate-400 mb-1">
-              Order Preview
-            </div>
-            <div
-              className={`font-mono text-base mb-3 font-semibold ${
-                action === 'BUY' ? 'text-green-400' : 'text-red-400'
-              }`}
-            >
-              {buildPreview()}
-            </div>
-            <div className="text-xs font-medium text-slate-400 mb-1">
-              API Command
-            </div>
-            <pre className="text-slate-300 font-mono text-xs whitespace-pre-wrap break-all leading-relaxed max-h-48 overflow-auto">
-              {buildCommandPreview()}
-            </pre>
+        <Field label="Order type">
+          <div style={{ display: "flex", gap: 0, background: "var(--bg-2)", border: "1px solid var(--bg-3)", borderRadius: 8, padding: 3 }}>
+            {(["LIMIT", "MARKET", "STOP"] as const).map((v) => {
+              const active = orderType === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setOrderType(v)}
+                  style={{
+                    flex: 1,
+                    padding: "8px 10px",
+                    fontSize: 12,
+                    fontWeight: active ? 700 : 500,
+                    border: 0,
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    transition: "background 0.15s",
+                    background: active ? "color-mix(in oklab, var(--info) 22%, transparent)" : "transparent",
+                    color: active ? "var(--info)" : "var(--text-dim)",
+                  }}
+                >
+                  {v}
+                </button>
+              );
+            })}
           </div>
+        </Field>
+
+        <Field label="Action">
+          <Segmented
+            options={SIDE_OPTIONS}
+            value={side}
+            onChange={(v) => setSide(v as Side)}
+            colorize={(v) =>
+              v === "BUY" || v === "BUY_TO_COVER" ? "var(--ok)" : "var(--bad)"
+            }
+          />
+        </Field>
+
+        <Field label="Fire when">
+          <Segmented
+            options={FIRE_OPTIONS}
+            value={fireWhen}
+            onChange={(v) => setFireWhen(v as FireWhen)}
+          />
+        </Field>
+
+        {fireWhen === "custom" && (
+          <Field label="Custom time">
+            <input
+              type="datetime-local"
+              value={customFire}
+              onChange={(e) => setCustomFire(e.target.value)}
+              min={toLocalDateTimeInputValue(new Date())}
+              style={inputStyle}
+            />
+          </Field>
         )}
 
-        {/* ─── Warning + Send button ───────────────────────────────── */}
-        <div>
-          <div className="text-amber-400 text-xs mb-3 bg-amber-500/10 border border-amber-500/30 rounded-lg p-2.5 leading-relaxed">
-            <span className="font-semibold">WARNING:</span> This order will be
-            sent right away once you press this button! Make sure it&apos;s
-            accurate.
+        {error && <Banner kind="error">{error}</Banner>}
+        {success && (
+          <Banner kind="ok">
+            <div>{success}</div>
+            {lastOrderId && (<div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const API = import.meta.env.VITE_API_URL || "/api";
+                    if (lastEtradeId && lastEtradeId !== "pending") {
+                      const cancelRes = await fetch(`${API}/orders/broker/${lastEtradeId}/cancel`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ accountIdKey: accountId }),
+                      });
+                      if (!cancelRes.ok) {
+                        const err = await cancelRes.json().catch(() => ({}));
+                        throw new Error(err.error ?? `Cancel failed (${cancelRes.status})`);
+                      }
+                      const verifyRes = await fetch(`${API}/orders/${lastOrderId}/verify`, { method: "POST" });
+                      if (verifyRes.ok) {
+                        const verified = await verifyRes.json();
+                        if (verified.status === "FILLED" || verified.status === "PARTIALLY_FILLED") {
+                          setSuccess(`Order already filled before cancel (${verified.filledQuantity ?? "?"} shares)`);
+                          setLastOrderId(null);
+                          setLastEtradeId(null);
+                          return;
+                        }
+                      }
+                    }
+                    await fetch(`${API}/orders/${lastOrderId}`, { method: "DELETE" });
+                    setSuccess("Order cancelled.");
+                    setLastOrderId(null);
+                    setLastEtradeId(null);
+                  } catch (err: any) {
+                    setError(err?.message ?? "Failed to cancel order");
+                  }
+                }}
+                style={{
+                  padding: "3px 10px",
+                  borderRadius: 4,
+                  border: "1px solid var(--bad)",
+                  background: "transparent",
+                  color: "var(--bad)",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const API = import.meta.env.VITE_API_URL || "/api";
+                    const res = await fetch(`${API}/orders/${lastOrderId}/verify`, { method: "POST" });
+                    if (!res.ok) throw new Error("Verify failed");
+                    const order = await res.json();
+                    const st = order.status;
+                    const eid = lastEtradeId ?? "?";
+                    if (st === "FILLED" || st === "PARTIALLY_FILLED") {
+                      const qty = order.filledQuantity ?? order.quantity;
+                      const px = order.filledPrice ?? order.limitPrice ?? lastLimitPrice.current;
+                      const comm = order.commission;
+                      const cpx = px ? `@ $${Number(px).toFixed(2)}` : "";
+                      const ccomm = comm ? ` + $${Number(comm).toFixed(2)} comm` : "";
+                      setSuccess(`E*TRADE id ${eid}\nFILLED ${qty} shares ${cpx}${ccomm}`);
+                      setLastOrderId(null);
+                      setLastEtradeId(null);
+                    } else if (st === "CANCELLED" || st === "EXPIRED" || st === "REJECTED") {
+                      setSuccess(`E*TRADE id ${eid}\n${st}${order.lastError ? "\n" + order.lastError : ""}`);
+                      setLastOrderId(null);
+                      setLastEtradeId(null);
+                    } else {
+                      const chkInfo = order.limitPrice ? `Limit $${Number(order.limitPrice).toFixed(2)}` : order.orderType ?? "Market";
+                      setSuccess(`E*TRADE id ${eid}\n${st} ${chkInfo}`);
+                    }
+                  } catch {
+                    setError("Failed to check status");
+                  }
+                }}
+                style={{
+                  padding: "3px 10px",
+                  borderRadius: 4,
+                  border: "1px solid var(--info)",
+                  background: "transparent",
+                  color: "var(--info)",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Check
+              </button>
+            </div>)}
+          </Banner>
+        )}
+      </div>
+
+      {/* ── RIGHT: confirm card ──────────────────────────────────── */}
+      <div
+        style={{
+          background: "var(--bg-2)",
+          border: "1px solid var(--bg-3)",
+          borderRadius: 12,
+          padding: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 14,
+          alignSelf: "start",
+          position: isNarrow ? "static" : "sticky",
+          top: 16,
+          order: isNarrow ? 1 : 2,
+        }}
+      >
+        <div
+          style={{
+            color: "var(--text-dim)",
+            fontSize: 11,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+          }}
+        >
+          Confirm
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 20,
+              fontWeight: 700,
+              color: "var(--text)",
+              lineHeight: 1.2,
+              flex: 1,
+            }}
+          >
+            <span
+              role="button"
+              tabIndex={0}
+              onClick={() => setSide((s) => s === "BUY" ? "SELL" : s === "SELL" ? "BUY" : s === "BUY_TO_COVER" ? "SELL_SHORT" : "BUY_TO_COVER")}
+              style={{
+                color: "#fff",
+                background:
+                  side === "BUY" || side === "BUY_TO_COVER"
+                    ? "var(--ok)"
+                    : "var(--bad)",
+                padding: "2px 8px",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+            >
+              {SIDE_OPTIONS.find((o) => o.value === side)?.label ?? side}
+            </span>
+            <span style={{ color: "var(--text-dim)", fontWeight: 500 }}>
+              {" "}
+              {quantity || 0}{" "}
+            </span>
+            <span>{symbol.trim().toUpperCase() || "—"}</span>
+            <span style={{ color: "var(--text-dim)", fontWeight: 500 }}>
+              {" "}
+              {orderType}
+            </span>
           </div>
           <button
             type="button"
-            onClick={handleSend}
-            disabled={!isReady || sending}
-            className={`w-full py-3.5 rounded-lg font-bold text-lg transition-colors ${
-              !isReady || sending
-                ? 'bg-slate-600 text-slate-400 cursor-not-allowed'
-                : action === 'BUY'
-                  ? 'bg-green-600 hover:bg-green-700 text-white'
-                  : action === 'SELL'
-                    ? 'bg-red-600 hover:bg-red-700 text-white'
-                    : 'bg-blue-600 hover:bg-blue-700 text-white'
-            }`}
+            onClick={() => quoteQuery.refetch()}
+            disabled={!symbol.trim() || quoteQuery.isFetching}
+            title="Refresh quote"
+            style={{
+              padding: "4px 8px",
+              borderRadius: 6,
+              border: "1px solid var(--bg-3)",
+              background: "transparent",
+              color: quoteQuery.isFetching ? "var(--text-dim)" : "var(--info)",
+              fontSize: 14,
+              cursor: !symbol.trim() || quoteQuery.isFetching ? "not-allowed" : "pointer",
+              flexShrink: 0,
+            }}
           >
-            {sending
-              ? 'Sending...'
-              : isReady
-                ? `SEND ${action} ORDER`
-                : 'SEND ORDER'}
+            {quoteQuery.isFetching ? "↻" : "↻"}
           </button>
         </div>
+
+        <Row label="Session" value={sessionLabel} />
+        <Row
+          label="Fires"
+          value={
+            fireWhen === "now"
+              ? "immediately"
+              : fireDate
+                ? formatHumanET(fireDate) + " ET"
+                : "—"
+          }
+        />
+
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr 1fr",
+            gap: 6,
+            padding: "10px 12px",
+            background: "var(--bg-1)",
+            borderRadius: 8,
+            fontFamily:
+              "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+            fontSize: 12,
+          }}
+        >
+          <QuoteCell
+            label="bid"
+            value={quote?.bid}
+            active={priceMode === "bid"}
+            onClick={() => handlePriceModeClick("bid")}
+          />
+          <QuoteCell
+            label="ask"
+            value={quote?.ask}
+            active={priceMode === "ask"}
+            onClick={() => handlePriceModeClick("ask")}
+          />
+          <QuoteCell
+            label="last"
+            value={quote?.last}
+            active={priceMode === "last"}
+            onClick={() => handlePriceModeClick("last")}
+          />
+        </div>
+
+        {orderType === "STOP" && (
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <span style={{ color: "var(--text-dim)", fontSize: 13, flexShrink: 0 }}>Stop $</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              value={stopPrice}
+              onChange={(e) => setStopPrice(e.target.value)}
+              placeholder="0.00"
+              style={{
+                flex: 1,
+                padding: "8px 10px",
+                background: "var(--bg-1)",
+                border: "1px solid var(--bg-3)",
+                borderRadius: 6,
+                color: "var(--text)",
+                fontSize: 14,
+                fontWeight: 600,
+                outline: "none",
+                minWidth: 0,
+              }}
+            />
+          </div>
+        )}
+        <Row
+          label="Est. cost"
+          value={
+            estCost != null
+              ? `$${estCost.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+              : "—"
+          }
+        />
+        <Row
+          label="Margin used"
+          value={
+            marginUsed != null
+              ? `$${marginUsed.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+              : "—"
+          }
+        />
+        {orderType === "LIMIT" && (
+          <Row
+            label="Limit price"
+            value={limitPrice != null ? `$${limitPrice.toFixed(2)}` : "—"}
+          />
+        )}
+
+        <button
+          type="button"
+          onClick={() => void handlePlace()}
+          disabled={!isReady || placing}
+          style={{
+            marginTop: 6,
+            padding: "14px 18px",
+            borderRadius: 10,
+            fontSize: 15,
+            fontWeight: 700,
+            border: 0,
+            cursor: !isReady || placing ? "not-allowed" : "pointer",
+            background:
+              !isReady || placing
+                ? "var(--bg-3)"
+                : side === "BUY" || side === "BUY_TO_COVER"
+                  ? "color-mix(in oklab, var(--ok) 75%, black)"
+                  : "color-mix(in oklab, var(--bad) 75%, black)",
+            color: !isReady || placing ? "var(--text-dim)" : "var(--text)",
+            transition: "background 0.15s",
+          }}
+        >
+          {placing ? "Placing..." : "Place order →"}
+        </button>
       </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Subcomponents                                                      */
+/* ------------------------------------------------------------------ */
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "10px 12px",
+  background: "var(--bg-2)",
+  border: "1px solid var(--bg-3)",
+  borderRadius: 8,
+  color: "var(--text)",
+  fontSize: 14,
+  outline: "none",
+};
+
+const selectStyle: React.CSSProperties = {
+  ...inputStyle,
+  appearance: "none",
+};
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <label
+        style={{
+          display: "block",
+          color: "var(--text-dim)",
+          fontSize: 11,
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          marginBottom: 6,
+        }}
+      >
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div
+      style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}
+    >
+      <span style={{ color: "var(--text-dim)" }}>{label}</span>
+      <span
+        style={{ color: "var(--text)", fontVariantNumeric: "tabular-nums" }}
+      >
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function QuoteCell({
+  label,
+  value,
+  active,
+  onClick,
+}: {
+  label: string;
+  value: number | undefined;
+  active?: boolean;
+  onClick?: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      style={{
+        textAlign: "center",
+        background: active
+          ? "color-mix(in oklab, var(--info) 22%, transparent)"
+          : "transparent",
+        border: active ? "1px solid var(--info)" : "1px solid transparent",
+        borderRadius: 6,
+        padding: "4px 2px",
+        cursor: onClick ? "pointer" : "default",
+        color: "inherit",
+        fontFamily: "inherit",
+        fontSize: "inherit",
+        transition: "background 0.15s, border-color 0.15s",
+      }}
+    >
+      <div
+        style={{
+          color: active ? "var(--info)" : "var(--text-dim)",
+          fontSize: 10,
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </div>
+      <div style={{ color: "var(--text)", fontSize: 13 }}>
+        {value != null && value > 0 ? `$${value.toFixed(2)}` : "—"}
+      </div>
+    </button>
+  );
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia(query).matches : false,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mq = window.matchMedia(query);
+    const onChange = () => setMatches(mq.matches);
+    setMatches(mq.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, [query]);
+  return matches;
+}
+
+function Banner({
+  kind,
+  children,
+}: {
+  kind: "error" | "ok";
+  children: React.ReactNode;
+}) {
+  const fg = kind === "error" ? "var(--bad)" : "var(--ok)";
+  return (
+    <div
+      style={{
+        padding: "8px 12px",
+        borderRadius: 8,
+        border: `1px solid ${fg}`,
+        background: `color-mix(in oklab, ${fg} 12%, transparent)`,
+        color: fg,
+        fontSize: 12,
+        whiteSpace: "pre-wrap",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+interface SegmentedProps<T extends string> {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  colorize?: (v: T) => string;
+}
+
+function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  colorize,
+}: SegmentedProps<T>) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(${options.length}, 1fr)`,
+        gap: 0,
+        background: "var(--bg-2)",
+        border: "1px solid var(--bg-3)",
+        borderRadius: 8,
+        padding: 3,
+      }}
+    >
+      {options.map((opt) => {
+        const active = opt.value === value;
+        const c = colorize ? colorize(opt.value) : "var(--info)";
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => onChange(opt.value)}
+            style={{
+              padding: "8px 10px",
+              fontSize: 12,
+              fontWeight: active ? 700 : 500,
+              border: 0,
+              borderRadius: 6,
+              cursor: "pointer",
+              transition: "background 0.15s",
+              background: active
+                ? `color-mix(in oklab, ${c} 22%, transparent)`
+                : "transparent",
+              color: active ? c : "var(--text-dim)",
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }

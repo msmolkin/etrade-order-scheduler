@@ -1,8 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import {
-  fetchPositionsCushions,
-  type PositionCushion,
-} from '../utils/api';
+import React from 'react';
+import { type PositionCushion } from '../utils/api';
+import { usePositionsCushion } from '../hooks/usePositionsCushion';
 
 interface PositionsCushionProps {
   onCreateOrderFromOption?: (params: {
@@ -18,26 +16,8 @@ interface PositionsCushionProps {
 export default function PositionsCushion({
   onCreateOrderFromOption,
 }: PositionsCushionProps) {
-  const [cushions, setCushions] = useState<PositionCushion[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        setLoading(true);
-        setError('');
-        const data = await fetchPositionsCushions();
-        setCushions(data);
-      } catch (err: any) {
-        setError(err.message || 'Failed to load trade ideas');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    load();
-  }, []);
+  const { data: cushions = [], isLoading: loading, error } = usePositionsCushion();
+  const errorMsg = error ? (error as Error).message || 'Failed to load trade ideas' : '';
 
   const handleClickLeg = (
     legType: 'CALL' | 'PUT',
@@ -72,9 +52,9 @@ export default function PositionsCushion({
         Options Trade Ideas (Max Pain)
       </h2>
 
-      {error && (
+      {errorMsg && (
         <div className="mb-4 p-4 bg-red-500/20 border border-red-500 rounded-lg text-red-400">
-          {error}
+          {errorMsg}
         </div>
       )}
 
@@ -84,7 +64,7 @@ export default function PositionsCushion({
         </div>
       )}
 
-      {!loading && cushions.length === 0 && !error && (
+      {!loading && cushions.length === 0 && !errorMsg && (
         <p className="text-slate-400 text-sm">
           No positions found for the current account.
         </p>
@@ -92,7 +72,7 @@ export default function PositionsCushion({
 
       {cushions.length > 0 && (
         <div className="space-y-3">
-          {cushions.map((c) => {
+          {cushions.map((c: PositionCushion) => {
             const underlying =
               c.position.underlyingSymbol || c.position.symbol;
             const quote = c.underlyingQuote;
@@ -309,4 +289,3 @@ export default function PositionsCushion({
     </div>
   );
 }
-

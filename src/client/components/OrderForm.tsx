@@ -1,14 +1,30 @@
-import React, { useEffect, useState, useRef } from 'react';
+/**
+ * Slice 5.2 — Create Order rewrite (progressive disclosure).
+ *
+ * Brief §3.5: a sectioned vertical form. Conditional fields only appear
+ * when their parent select unlocks them (option chain, threshold extras,
+ * limit/stop prices). Schedule segmented control with a 5-cell preview
+ * strip when Daily/Weekly is chosen. Sticky bottom summary that reads
+ * back the order in plain English. Single in-place "Confirm? ↵ / ESC"
+ * prompt for 3 s before firing (Brief §5.4).
+ *
+ * Threshold-monitor wiring is preserved — the same fields, the same POST
+ * shape; only the chrome changes.
+ */
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  createOrder,
-  fetchAccounts,
   fetchOptionExpirations,
-  fetchQuote,
+  fetchOptionsChain,
+  fetchPositions,
   searchSymbols,
-  submitOrder,
-  type TradingAccount,
+  type Order,
+  type Position,
   type SymbolSearchResult,
-} from '../utils/api';
+} from "../utils/api";
+import { useAccounts } from "../hooks/useAccounts";
+import { useQuote } from "../hooks/useQuote";
+import { useCreateOrder } from "../hooks/useCreateOrder";
+import { useSubmitOrder } from "../hooks/useOrderMutations";
 
 export type OrderFormDraft = Partial<{
   accountId: string;
@@ -19,17 +35,18 @@ export type OrderFormDraft = Partial<{
   limitPrice: string;
   stopPrice: string;
   notes: string;
-  securityType: 'EQUITY' | 'OPTION';
-  optionType: 'CALL' | 'PUT';
+  securityType: "EQUITY" | "OPTION" | "MUTUAL_FUND" | "MONEY_MARKET_FUND";
+  optionType: "CALL" | "PUT";
   strikePrice: number;
   expirationDate: string;
   preferredDuration: string;
   actualDuration: string;
   sessionTime: string;
   scheduleEnabled: boolean;
-  scheduleFrequency: 'DAILY' | 'WEEKLY';
+  scheduleFrequency: "DAILY" | "WEEKLY";
   scheduleOnce: boolean;
   scheduledFor: string;
+  onlyFillOnce: boolean;
 }>;
 
 interface OrderFormProps {
@@ -37,1331 +54,2205 @@ interface OrderFormProps {
   onOrderCreated?: (draft: OrderFormDraft) => void;
 }
 
-type FormState = {
+type SecurityType = "EQUITY" | "OPTION" | "MUTUAL_FUND" | "MONEY_MARKET_FUND";
+type Action = "BUY" | "SELL" | "BUY_TO_COVER" | "SELL_SHORT";
+type OrderType = "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT" | "THRESHOLD";
+type Cadence = "ONCE" | "DAILY" | "WEEKLY" | "THRESHOLD";
+type Session = "MARKET" | "EXTENDED";
+
+interface FormState {
   accountId: string;
   symbol: string;
-  securityType: 'EQUITY' | 'OPTION';
-  optionType: 'CALL' | 'PUT';
+  securityType: SecurityType;
+  optionType: "CALL" | "PUT";
   strikePrice: string;
   expirationDate: string;
-  action: 'BUY' | 'SELL' | 'BUY_TO_COVER' | 'SELL_SHORT';
-  orderType: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT' | 'THRESHOLD';
-  quantity: number | '';
+  action: Action;
+  orderType: OrderType;
+  quantity: number | "";
   limitPrice: string;
   stopPrice: string;
-  preferredDuration: string;
-  actualDuration: string;
-  sessionTime: 'MARKET' | 'EXTENDED';
+  cadence: Cadence;
   scheduledFor: string;
-  scheduleEnabled: boolean;
-  scheduleFrequency: 'DAILY' | 'WEEKLY';
-  scheduleOnce: boolean;
-  notes: string;
-  thresholdEnabled: boolean;
+  session: Session;
   thresholdPrice: string;
-  thresholdPriceSource: 'BID' | 'ASK' | 'LAST';
+  thresholdPriceSource: "BID" | "ASK" | "LAST";
   thresholdQuantity: number;
   thresholdPollIntervalMs: number;
   thresholdLogFile: string;
-  sellOrderEnabled: boolean;
-  sellOrderThresholdPrice: string;
-  sellOrderThresholdPriceSource: 'BID' | 'ASK' | 'LAST';
-  sellOrderQuantity: number;
-};
+  notes: string;
+  onlyFillOnce: boolean;
+}
 
-const initialFormState: FormState = {
-  accountId: '',
-  symbol: '',
-  securityType: 'EQUITY',
-  optionType: 'CALL' as 'CALL' | 'PUT',
-  strikePrice: '',
-  expirationDate: '',
-  action: 'BUY',
-  orderType: 'LIMIT',
+const initial: FormState = {
+  accountId: "",
+  symbol: "",
+  securityType: "EQUITY",
+  optionType: "CALL",
+  strikePrice: "",
+  expirationDate: "",
+  action: "BUY",
+  orderType: "LIMIT",
   quantity: 1,
-  limitPrice: '',
-  stopPrice: '',
-  preferredDuration: 'DAY',
-  actualDuration: 'DAY',
-  sessionTime: 'EXTENDED',
-  scheduledFor: '',
-  scheduleEnabled: true,
-  scheduleFrequency: 'DAILY',
-  scheduleOnce: false,
-  notes: '',
-  thresholdEnabled: false,
-  thresholdPrice: '',
-  thresholdPriceSource: 'BID' as 'BID' | 'ASK' | 'LAST',
+  limitPrice: "",
+  stopPrice: "",
+  cadence: "ONCE",
+  scheduledFor: "",
+  session: "EXTENDED",
+  thresholdPrice: "",
+  thresholdPriceSource: "BID",
   thresholdQuantity: 1,
   thresholdPollIntervalMs: 1000,
-  thresholdLogFile: '',
-  sellOrderEnabled: false,
-  sellOrderThresholdPrice: '',
-  sellOrderThresholdPriceSource: 'ASK' as 'BID' | 'ASK' | 'LAST',
-  sellOrderQuantity: 1,
+  thresholdLogFile: "",
+  notes: "",
+  onlyFillOnce: true,
 };
 
-export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
-  const [formData, setFormData] = useState<FormState>(initialFormState);
+/* ---------------- date helpers ---------------- */
 
-  const [submitting, setSubmitting] = useState(false);
-  const [sendingNow, setSendingNow] = useState(false);
-  const [error, setError] = useState('');
-  const [successMessage, setSuccessMessage] = useState('');
-  const [accounts, setAccounts] = useState<TradingAccount[]>([]);
-  const [accountsLoading, setAccountsLoading] = useState(false);
-  const [accountsError, setAccountsError] = useState('');
-  const [autoPricing, setAutoPricing] = useState(false);
-  const [autoPricingError, setAutoPricingError] = useState('');
-  const [symbolResults, setSymbolResults] = useState<SymbolSearchResult[]>([]);
-  const [symbolSearchLoading, setSymbolSearchLoading] = useState(false);
-  const [symbolSearchError, setSymbolSearchError] = useState('');
-  const [showSymbolDropdown, setShowSymbolDropdown] = useState(false);
-  const symbolInputRef = useRef<HTMLDivElement>(null);
-  const [optionExpirations, setOptionExpirations] = useState<string[]>([]);
-  const [optionExpirationsLoading, setOptionExpirationsLoading] = useState(false);
-  const [optionExpirationsError, setOptionExpirationsError] = useState('');
-  const [scheduledForTouched, setScheduledForTouched] = useState(false);
-  const [durationNotice, setDurationNotice] = useState('');
+function pad(n: number): string {
+  return String(n).padStart(2, "0");
+}
 
-  // GTC is not valid for Extended Hours or SELL SHORT
-  const gtcRestricted = formData.sessionTime === 'EXTENDED' || formData.action === 'SELL_SHORT';
+function toLocalDateTimeInputValue(d: Date): string {
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
-  // Auto-dismiss duration notice after 4 seconds
-  useEffect(() => {
-    if (!durationNotice) return;
-    const timer = setTimeout(() => setDurationNotice(''), 4000);
-    return () => clearTimeout(timer);
-  }, [durationNotice]);
+function normalCdf(x: number): number {
+  const t = 1 / (1 + 0.2316419 * Math.abs(x));
+  const d = 0.3989423 * Math.exp((-x * x) / 2);
+  const p =
+    d *
+    t *
+    (0.3193815 +
+      t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+  return x > 0 ? 1 - p : p;
+}
 
-  // Enforce GTC restriction: auto-switch to DAY + DAILY when GTC becomes invalid
-  useEffect(() => {
-    if (!gtcRestricted) return;
-    if (formData.actualDuration !== 'GTC') return;
+function normalizeIv(value: unknown): number | null {
+  const iv = Number(value);
+  if (!Number.isFinite(iv) || iv <= 0) return null;
+  return iv > 3 ? iv / 100 : iv;
+}
 
-    const reasons: string[] = [];
-    if (formData.sessionTime === 'EXTENDED') reasons.push('Extended Hours');
-    if (formData.action === 'SELL_SHORT') reasons.push('Sell Short');
+function yearsToOptionExpiration(expirationDate: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(expirationDate);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!year || !month || !day) return null;
 
-    setFormData((prev) => ({
-      ...prev,
-      actualDuration: 'DAY',
-      scheduleFrequency: 'DAILY',
-    }));
-    setDurationNotice(
-      `Switched to DAY order + daily frequency (GTC not available with ${reasons.join(' and ')})`
-    );
-  }, [gtcRestricted, formData.actualDuration, formData.sessionTime, formData.action]);
+  // Approximate listed option expiration at 4 PM ET as 20:00 UTC. Good enough
+  // for a UI reference price; broker-side pricing remains authoritative.
+  const expiryMs = Date.UTC(year, month - 1, day, 20, 0, 0, 0);
+  const ms = expiryMs - Date.now();
+  return Math.max(ms / (365 * 24 * 60 * 60_000), 1 / 365);
+}
 
-  useEffect(() => {
-    const loadAccounts = async () => {
-      try {
-        setAccountsLoading(true);
-        setAccountsError('');
+function blackScholesPrice(args: {
+  optionType: "CALL" | "PUT";
+  spot: number;
+  strike: number;
+  years: number;
+  volatility: number;
+  riskFreeRate: number;
+}): number | null {
+  const { optionType, spot, strike, years, volatility, riskFreeRate } = args;
+  if (
+    spot <= 0 ||
+    strike <= 0 ||
+    years <= 0 ||
+    volatility <= 0 ||
+    !Number.isFinite(spot + strike + years + volatility + riskFreeRate)
+  ) {
+    return null;
+  }
 
-        const storedAccountIdKey =
-          typeof window !== 'undefined'
-            ? window.localStorage.getItem('selectedAccountIdKey')
-            : null;
+  const sqrtT = Math.sqrt(years);
+  const d1 =
+    (Math.log(spot / strike) +
+      (riskFreeRate + (volatility * volatility) / 2) * years) /
+    (volatility * sqrtT);
+  const d2 = d1 - volatility * sqrtT;
+  const discountedStrike = strike * Math.exp(-riskFreeRate * years);
 
-        const { accounts: fetchedAccounts, defaultAccountIdKey } = await fetchAccounts();
-        setAccounts(fetchedAccounts);
+  if (optionType === "CALL") {
+    return spot * normalCdf(d1) - discountedStrike * normalCdf(d2);
+  }
+  return discountedStrike * normalCdf(-d2) - spot * normalCdf(-d1);
+}
 
-        const initialAccountIdKey =
-          storedAccountIdKey && fetchedAccounts.some((a) => a.accountIdKey === storedAccountIdKey)
-            ? storedAccountIdKey
-            : defaultAccountIdKey;
+/**
+ * Build an ISO timestamp at the given hour:minute in ET on a calendar date.
+ * Rough EST/EDT handling matches the QuickSend approach: we read the
+ * shortOffset for that instant so DST flips are handled.
+ */
+function etInstantAt(date: Date, hour: number, minute: number): Date {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = fmt
+    .formatToParts(date)
+    .reduce<Record<string, string>>((acc, p) => {
+      if (p.type !== "literal") acc[p.type] = p.value;
+      return acc;
+    }, {});
+  const year = parseInt(parts.year, 10);
+  const month = parseInt(parts.month, 10);
+  const day = parseInt(parts.day, 10);
 
-        if (initialAccountIdKey) {
-          setFormData((prev) => ({
-            ...prev,
-            accountId: initialAccountIdKey,
-          }));
-        }
-      } catch (err: any) {
-        setAccountsError(err.message || 'Failed to load accounts');
-      } finally {
-        setAccountsLoading(false);
+  // Determine offset for *that* date by formatting a reference at noon ET.
+  const probe = new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+  const tzFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    timeZoneName: "shortOffset",
+  });
+  const tzPart =
+    tzFmt.formatToParts(probe).find((p) => p.type === "timeZoneName")?.value ??
+    "GMT-5";
+  const m = tzPart.match(/GMT([+-])(\d{1,2})/);
+  const sign = m && m[1] === "+" ? 1 : -1;
+  const hours = m ? parseInt(m[2], 10) : 5;
+  const offsetMs = sign * hours * 60 * 60_000;
+
+  return new Date(Date.UTC(year, month - 1, day, hour, minute, 0) - offsetMs);
+}
+
+function isWeekendET(d: Date): boolean {
+  const wd = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+  }).format(d);
+  return wd === "Sat" || wd === "Sun";
+}
+
+// NYSE full-closure holidays. Update annually around December.
+// Source: tradingview/src/market/marketHours.ts (NYSE_FULL_CLOSURES).
+// Weekend holidays: only observed if they shift to a weekday (Jul 4 Sat->Fri,
+// Sun->Mon; Christmas same). Juneteenth on Sat (2027) is NOT observed.
+const NYSE_HOLIDAYS: Set<string> = new Set([
+  // 2025
+  "2025-01-01",
+  "2025-01-20",
+  "2025-02-17",
+  "2025-04-18",
+  "2025-05-26",
+  "2025-06-19",
+  "2025-07-04",
+  "2025-09-01",
+  "2025-11-27",
+  "2025-12-25",
+  // 2026
+  "2026-01-01",
+  "2026-01-19",
+  "2026-02-16",
+  "2026-04-03",
+  "2026-05-25",
+  "2026-06-19",
+  "2026-07-03",
+  "2026-09-07",
+  "2026-11-26",
+  "2026-12-25",
+  // 2027 — Juneteenth (Jun 19) falls on Saturday, NYSE does NOT observe
+  "2027-01-01",
+  "2027-01-18",
+  "2027-02-15",
+  "2027-03-26",
+  "2027-05-31",
+  "2027-07-05",
+  "2027-09-06",
+  "2027-11-25",
+  "2027-12-24",
+]);
+
+// Early closes (1 PM ET regular, 5 PM ET after-hours).
+// On these days, EXTENDED session orders after 5 PM ET will be rejected.
+const NYSE_EARLY_CLOSE: Set<string> = new Set([
+  "2025-07-03",
+  "2025-11-28",
+  "2025-12-24",
+  "2026-11-27",
+  "2026-12-24",
+  "2027-11-26",
+]);
+
+function etDateStr(d: Date): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+function isMarketClosed(d: Date): boolean {
+  return isWeekendET(d) || NYSE_HOLIDAYS.has(etDateStr(d));
+}
+
+function isEarlyClose(d: Date): boolean {
+  return NYSE_EARLY_CLOSE.has(etDateStr(d));
+}
+
+function nextTradingDay(d: Date): Date {
+  let next = new Date(d.getTime() + 24 * 60 * 60_000);
+  while (isMarketClosed(next))
+    next = new Date(next.getTime() + 24 * 60 * 60_000);
+  return next;
+}
+
+function todayOrNextTradingDay(d: Date): Date {
+  if (!isMarketClosed(d)) return d;
+  let next = new Date(d.getTime() + 24 * 60 * 60_000);
+  while (isMarketClosed(next))
+    next = new Date(next.getTime() + 24 * 60 * 60_000);
+  return next;
+}
+
+// Keep old names for backward compat in computeFires
+function nextWeekday(d: Date): Date {
+  return nextTradingDay(d);
+}
+
+function formatHumanET(d: Date): string {
+  return d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function compactCadenceCell(d: Date): string {
+  return d.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+/**
+ * Compute the next 5 fire timestamps based on cadence & session.
+ * - Daily: starting tomorrow ET (skipping weekends), at 7:00 ET (extended)
+ *   or 9:30 ET (market). 5 sequential trading days.
+ * - Weekly: same hour, but 7 days apart (skip weekends if it lands on one).
+ */
+function computeFires(
+  cadence: Cadence,
+  session: Session,
+  count: number = 5,
+): Date[] {
+  const hour = session === "EXTENDED" ? 7 : 9;
+  const minute = session === "EXTENDED" ? 0 : 30;
+  const fires: Date[] = [];
+
+  let cursor = nextWeekday(new Date());
+  let firstFire = etInstantAt(cursor, hour, minute);
+  fires.push(firstFire);
+
+  for (let i = 1; i < count; i++) {
+    if (cadence === "WEEKLY") {
+      cursor = new Date(cursor.getTime() + 7 * 24 * 60 * 60_000);
+      while (isWeekendET(cursor)) {
+        cursor = new Date(cursor.getTime() + 24 * 60 * 60_000);
       }
-    };
-
-    loadAccounts();
-  }, []);
-
-  // Fetch real option expiration dates when symbol is set and security type is OPTION
-  useEffect(() => {
-    const symbol = formData.symbol.trim();
-    if (formData.securityType !== 'OPTION' || !symbol) {
-      setOptionExpirations([]);
-      setOptionExpirationsError('');
-      return;
+    } else {
+      cursor = nextWeekday(cursor);
     }
+    fires.push(etInstantAt(cursor, hour, minute));
+  }
+  return fires;
+}
 
-    let cancelled = false;
-    setOptionExpirationsLoading(true);
-    setOptionExpirationsError('');
+/* ---------------- component ---------------- */
 
-    fetchOptionExpirations(symbol)
-      .then((dates) => {
-        if (!cancelled) {
-          setOptionExpirations(dates);
-          setOptionExpirationsError('');
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setOptionExpirations([]);
-          setOptionExpirationsError(err.message || 'Failed to load expirations');
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setOptionExpirationsLoading(false);
-      });
+export default function OrderForm({ draft, onOrderCreated }: OrderFormProps) {
+  const [form, setForm] = useState<FormState>(initial);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+  const [confirming, setConfirming] = useState<boolean>(false);
+  const [confirmCountdown, setConfirmCountdown] = useState<number>(0);
+  const confirmTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const placingRef = useRef(false);
+  const [pmWarning, setPmWarning] = useState<{
+    action: string;
+    qty: number;
+    symbol: string;
+    price: number;
+  } | null>(null);
 
-    return () => {
-      cancelled = true;
-    };
-  }, [formData.securityType, formData.symbol]);
+  const accountsQuery = useAccounts();
+  const accounts = accountsQuery.data?.accounts ?? [];
+  const defaultAccountIdKey = accountsQuery.data?.defaultAccountIdKey ?? null;
 
-  // When option expirations load, clear expirationDate if it's not in the list
+  const quoteQuery = useQuote(form.symbol);
+  const quote = quoteQuery.data ?? null;
+
+  const createMut = useCreateOrder();
+  const submitMut = useSubmitOrder();
+  const placing = createMut.isPending || submitMut.isPending;
+
+  /* Symbol search dropdown ----------------------------------------- */
+  const symbolWrapRef = useRef<HTMLDivElement>(null);
+  const symbolJustSelected = useRef(false);
+  const [symbolResults, setSymbolResults] = useState<SymbolSearchResult[]>([]);
+  const [symbolDropdownOpen, setSymbolDropdownOpen] = useState(false);
+  const [symbolError, setSymbolError] = useState("");
+
+  /* Option expirations --------------------------------------------- */
+  const [optionExpirations, setOptionExpirations] = useState<string[]>([]);
+  const [optionExpirationsError, setOptionExpirationsError] = useState("");
+  const [optionQuote, setOptionQuote] = useState<{
+    bid: number;
+    ask: number;
+    last: number;
+    impliedVolatility?: number;
+  } | null>(null);
+  const [optionQuoteLoading, setOptionQuoteLoading] = useState(false);
+  const [optionQuoteError, setOptionQuoteError] = useState("");
+  const [heldQty, setHeldQty] = useState<number | null>(null);
+
   useEffect(() => {
-    if (
-      formData.securityType !== 'OPTION' ||
-      optionExpirations.length === 0 ||
-      !formData.expirationDate
-    )
-      return;
-    const valid = optionExpirations.includes(formData.expirationDate);
-    if (!valid) {
-      setFormData((prev) => ({ ...prev, expirationDate: '' }));
-    }
-  }, [optionExpirations, formData.securityType, formData.expirationDate]);
+    setHeldQty(null);
+    if (!form.symbol || !form.accountId) return;
+    if (form.action !== "SELL" && form.action !== "BUY_TO_COVER") return;
+    fetchPositions(form.accountId).then((positions) => {
+      const sym = form.symbol.toUpperCase();
+      let matching;
+      if (form.securityType === "OPTION") {
+        // Match the specific option leg (symbol + type + strike + expiration).
+        matching = positions.filter(
+          (p) =>
+            p.symbol.toUpperCase() === sym &&
+            p.securityType === "OPTN" &&
+            p.optionType === form.optionType &&
+            p.strikePrice != null &&
+            String(p.strikePrice) === form.strikePrice &&
+            p.expirationDate === form.expirationDate,
+        );
+      } else {
+        // Equity / other: match symbol + securityType "EQ", sum across lots.
+        matching = positions.filter(
+          (p) => p.symbol.toUpperCase() === sym && p.securityType === "EQ",
+        );
+      }
+      const total = matching.reduce((sum, p) => sum + Math.abs(p.quantity), 0);
+      setHeldQty(total);
+    });
+  }, [
+    form.symbol,
+    form.accountId,
+    form.action,
+    form.securityType,
+    form.optionType,
+    form.strikePrice,
+    form.expirationDate,
+  ]);
 
-  // Apply external draft pre-fill when it changes
+  /* Initial account select ----------------------------------------- */
+  useEffect(() => {
+    if (form.accountId || accounts.length === 0) return;
+    const stored =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("selectedAccountIdKey")
+        : null;
+    const initialKey =
+      stored && accounts.some((a) => a.accountIdKey === stored)
+        ? stored
+        : (defaultAccountIdKey ?? accounts[0]?.accountIdKey ?? "");
+    if (initialKey) setForm((p) => ({ ...p, accountId: initialKey }));
+  }, [accounts, defaultAccountIdKey, form.accountId]);
+
+  /* Apply external draft prefill ----------------------------------- */
   useEffect(() => {
     if (!draft) return;
-
-    setFormData((prev) => ({
+    setForm((prev) => ({
       ...prev,
       accountId: draft.accountId ?? prev.accountId,
       symbol: draft.symbol ?? prev.symbol,
       securityType:
-        draft.securityType === 'EQUITY' || draft.securityType === 'OPTION'
+        draft.securityType === "EQUITY" ||
+        draft.securityType === "OPTION" ||
+        draft.securityType === "MUTUAL_FUND" ||
+        draft.securityType === "MONEY_MARKET_FUND"
           ? draft.securityType
           : prev.securityType,
-      optionType:
-        draft.optionType === 'CALL' || draft.optionType === 'PUT'
-          ? draft.optionType
-          : prev.optionType,
+      optionType: draft.optionType ?? prev.optionType,
       strikePrice:
         draft.strikePrice != null
           ? String(draft.strikePrice)
           : prev.strikePrice,
       expirationDate: draft.expirationDate ?? prev.expirationDate,
       action:
-        draft.action === 'BUY' ||
-        draft.action === 'SELL' ||
-        draft.action === 'BUY_TO_COVER' ||
-        draft.action === 'SELL_SHORT'
+        draft.action === "BUY" ||
+        draft.action === "SELL" ||
+        draft.action === "BUY_TO_COVER" ||
+        draft.action === "SELL_SHORT"
           ? draft.action
           : prev.action,
       orderType:
-        draft.orderType === 'MARKET' ||
-        draft.orderType === 'LIMIT' ||
-        draft.orderType === 'STOP' ||
-        draft.orderType === 'STOP_LIMIT' ||
-        draft.orderType === 'THRESHOLD'
+        draft.orderType === "MARKET" ||
+        draft.orderType === "LIMIT" ||
+        draft.orderType === "STOP" ||
+        draft.orderType === "STOP_LIMIT" ||
+        draft.orderType === "THRESHOLD"
           ? draft.orderType
           : prev.orderType,
       quantity: draft.quantity ?? prev.quantity,
       limitPrice: draft.limitPrice ?? prev.limitPrice,
       stopPrice: draft.stopPrice ?? prev.stopPrice,
-      preferredDuration: draft.preferredDuration ?? prev.preferredDuration,
-      actualDuration: draft.actualDuration ?? prev.actualDuration,
-      sessionTime:
-        draft.sessionTime === 'MARKET' || draft.sessionTime === 'EXTENDED'
+      session:
+        draft.sessionTime === "MARKET" || draft.sessionTime === "EXTENDED"
           ? draft.sessionTime
-          : prev.sessionTime,
-      scheduleEnabled: draft.scheduleEnabled ?? prev.scheduleEnabled,
-      scheduleFrequency:
-        draft.scheduleFrequency === 'DAILY' || draft.scheduleFrequency === 'WEEKLY'
-          ? draft.scheduleFrequency
-          : prev.scheduleFrequency,
-      scheduleOnce: draft.scheduleOnce ?? prev.scheduleOnce,
+          : prev.session,
+      cadence: draft.scheduleEnabled
+        ? draft.scheduleFrequency === "WEEKLY"
+          ? "WEEKLY"
+          : draft.scheduleOnce
+            ? "ONCE"
+            : "DAILY"
+        : prev.cadence,
       scheduledFor: draft.scheduledFor ?? prev.scheduledFor,
       notes: draft.notes ?? prev.notes,
+      onlyFillOnce: draft.onlyFillOnce ?? prev.onlyFillOnce,
     }));
   }, [draft]);
 
-  const getNextTradingDay = (sessionTime: string): Date => {
-    const next = new Date();
-    const hour = sessionTime === 'EXTENDED' ? 7 : 9;
-    const minute = sessionTime === 'EXTENDED' ? 0 : 30;
-    next.setHours(hour, minute, 0, 0);
-    next.setDate(next.getDate() + 1);
-    const day = next.getDay();
-    if (day === 0) next.setDate(next.getDate() + 1);
-    if (day === 6) next.setDate(next.getDate() + 2);
-    return next;
-  };
-
-  const formatDateTimeLocal = (date: Date): string => {
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(
-      date.getHours()
-    )}:${pad(date.getMinutes())}`;
-  };
-
-  const getSuggestedScheduleFor = (sessionTime: string): string =>
-    formatDateTimeLocal(getNextTradingDay(sessionTime));
-
+  /* Symbol search effect ------------------------------------------- */
   useEffect(() => {
-    if (!formData.scheduleEnabled) return;
-    if (scheduledForTouched) return;
-    const nextValue = getSuggestedScheduleFor(formData.sessionTime);
-    if (formData.scheduledFor !== nextValue) {
-      setFormData((prev) => ({ ...prev, scheduledFor: nextValue }));
-    }
-  }, [formData.scheduleEnabled, formData.sessionTime, scheduledForTouched]);
-
-  // Search for symbols as user types
-  useEffect(() => {
-    const query = formData.symbol.trim();
-
+    const query = form.symbol.trim();
     if (!query || query.length < 2) {
       setSymbolResults([]);
-      setShowSymbolDropdown(false);
-      setSymbolSearchError('');
-      setSymbolSearchLoading(false);
+      setSymbolDropdownOpen(false);
+      setSymbolError("");
+      return;
+    }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const results = await searchSymbols(query);
+        if (cancelled) return;
+        setSymbolResults(results);
+        if (!symbolJustSelected.current)
+          setSymbolDropdownOpen(results.length > 0);
+        symbolJustSelected.current = false;
+      } catch (err: any) {
+        if (cancelled) return;
+        setSymbolResults([]);
+        setSymbolDropdownOpen(false);
+        setSymbolError(err?.message || "Failed to search symbols");
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [form.symbol]);
+
+  /* Click outside symbol dropdown ---------------------------------- */
+  useEffect(() => {
+    if (!symbolDropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        symbolWrapRef.current &&
+        !symbolWrapRef.current.contains(e.target as Node)
+      ) {
+        setSymbolDropdownOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [symbolDropdownOpen]);
+
+  /* Option expirations effect -------------------------------------- */
+  useEffect(() => {
+    const sym = form.symbol.trim();
+    if (form.securityType !== "OPTION" || !sym) {
+      setOptionExpirations([]);
+      setOptionExpirationsError("");
+      return;
+    }
+    let cancelled = false;
+    fetchOptionExpirations(sym)
+      .then((dates) => {
+        if (cancelled) return;
+        setOptionExpirations(dates);
+        setOptionExpirationsError("");
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setOptionExpirations([]);
+        setOptionExpirationsError(err?.message || "Failed to load expirations");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [form.symbol, form.securityType]);
+
+  /* Selected option quote ----------------------------------------- */
+  useEffect(() => {
+    const sym = form.symbol.trim();
+    const strike = Number(form.strikePrice);
+    if (
+      form.securityType !== "OPTION" ||
+      !sym ||
+      !form.expirationDate ||
+      !Number.isFinite(strike) ||
+      strike <= 0
+    ) {
+      setOptionQuote(null);
+      setOptionQuoteLoading(false);
+      setOptionQuoteError("");
       return;
     }
 
     let cancelled = false;
-    setSymbolSearchLoading(true);
-    setSymbolSearchError('');
+    setOptionQuoteLoading(true);
+    setOptionQuoteError("");
 
-    const timeoutId = setTimeout(async () => {
+    const t = setTimeout(async () => {
       try {
-        const results = await searchSymbols(query);
+        const chain = await fetchOptionsChain(sym, form.expirationDate);
         if (cancelled) return;
-
-        setSymbolResults(results);
-        setShowSymbolDropdown(results.length > 0);
+        const legs = form.optionType === "CALL" ? chain?.calls : chain?.puts;
+        const leg = Array.isArray(legs)
+          ? legs.find(
+              (candidate: any) =>
+                Math.abs(Number(candidate?.strikePrice) - strike) < 0.001,
+            )
+          : null;
+        const iv = normalizeIv(leg?.impliedVolatility);
+        setOptionQuote(
+          leg
+            ? {
+                bid: Number(leg.bid ?? 0),
+                ask: Number(leg.ask ?? 0),
+                last: Number(leg.last ?? 0),
+                impliedVolatility: iv ?? undefined,
+              }
+            : null,
+        );
+        setOptionQuoteError(leg ? "" : "Option quote not found");
       } catch (err: any) {
         if (cancelled) return;
-        setSymbolResults([]);
-        setShowSymbolDropdown(false);
-        setSymbolSearchError(
-          err.message || 'Failed to search symbols'
-        );
+        setOptionQuote(null);
+        setOptionQuoteError(err?.message || "Failed to load option quote");
       } finally {
-        if (!cancelled) {
-          setSymbolSearchLoading(false);
-        }
+        if (!cancelled) setOptionQuoteLoading(false);
       }
     }, 250);
 
     return () => {
       cancelled = true;
-      clearTimeout(timeoutId);
+      clearTimeout(t);
     };
-  }, [formData.symbol]);
+  }, [
+    form.symbol,
+    form.securityType,
+    form.optionType,
+    form.strikePrice,
+    form.expirationDate,
+  ]);
 
-  const handleSelectSymbol = (result: SymbolSearchResult) => {
-    setFormData((prev) => ({
-      ...prev,
-      symbol: result.symbol.toUpperCase(),
-    }));
-    setShowSymbolDropdown(false);
-  };
+  /* Theoretical price — derived from chain IV + live spot, no refetch */
+  const theoretical = useMemo(() => {
+    if (!optionQuote?.impliedVolatility) return undefined;
+    const strike = Number(form.strikePrice);
+    const years = yearsToOptionExpiration(form.expirationDate);
+    if (!Number.isFinite(strike) || strike <= 0 || years == null)
+      return undefined;
+    const spot = quote?.last ?? 0;
+    if (spot <= 0) return undefined;
+    const price = blackScholesPrice({
+      optionType: form.optionType,
+      spot,
+      strike,
+      years,
+      volatility: optionQuote.impliedVolatility,
+      riskFreeRate: 0.045,
+    });
+    return price ?? undefined;
+  }, [
+    optionQuote?.impliedVolatility,
+    form.strikePrice,
+    form.expirationDate,
+    form.optionType,
+    quote?.last,
+  ]);
 
-  // Close dropdown when clicking outside
+  /* Cleanup confirm timer ----------------------------------------- */
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        symbolInputRef.current &&
-        !symbolInputRef.current.contains(event.target as Node)
-      ) {
-        setShowSymbolDropdown(false);
-      }
-    };
-
-    if (showSymbolDropdown) {
-      document.addEventListener('mousedown', handleClickOutside);
-      return () => {
-        document.removeEventListener('mousedown', handleClickOutside);
-      };
-    }
-  }, [showSymbolDropdown]);
-
-  // When using LIMIT orders, automatically set limit price to current bid/ask.
-  useEffect(() => {
-    const shouldAutoPrice =
-      formData.orderType === 'LIMIT' &&
-      !!formData.symbol &&
-      (formData.action === 'BUY' ||
-        formData.action === 'SELL' ||
-        formData.action === 'BUY_TO_COVER' ||
-        formData.action === 'SELL_SHORT');
-
-    if (!shouldAutoPrice) {
-      setAutoPricing(false);
-      setAutoPricingError('');
-      return;
-    }
-
-    let cancelled = false;
-    setAutoPricing(true);
-    setAutoPricingError('');
-
-    const loadQuote = async () => {
-      try {
-        const quotes = await fetchQuote([formData.symbol]);
-        const quote = Array.isArray(quotes) ? quotes[0] : quotes;
-        if (!quote || cancelled) return;
-
-        const bid = typeof quote.bid === 'number' ? quote.bid : undefined;
-        const ask = typeof quote.ask === 'number' ? quote.ask : undefined;
-
-        let nextLimit: number | undefined;
-        if (formData.action === 'BUY' || formData.action === 'BUY_TO_COVER') {
-          nextLimit = ask ?? bid;
-        } else if (formData.action === 'SELL' || formData.action === 'SELL_SHORT') {
-          nextLimit = bid ?? ask;
-        }
-
-        if (nextLimit && !cancelled) {
-          setFormData((prev) => ({
-            ...prev,
-            limitPrice: nextLimit.toFixed(2),
-          }));
-        }
-      } catch (err: any) {
-        if (!cancelled) {
-          const msg = err?.message ?? '';
-          setAutoPricingError(
-            msg === 'Failed to fetch'
-              ? 'Could not reach server for live price. Enter limit price manually.'
-              : msg || 'Failed to fetch live price for limit order'
-          );
-        }
-      } finally {
-        if (!cancelled) {
-          setAutoPricing(false);
-        }
-      }
-    };
-
-    loadQuote();
-
     return () => {
-      cancelled = true;
+      if (confirmTimerRef.current) clearInterval(confirmTimerRef.current);
     };
-    // Re-run when symbol, orderType, or action changes
-  }, [formData.symbol, formData.orderType, formData.action]);
+  }, []);
 
-  const buildOrderPayload = (overrides?: Partial<typeof formData>) => {
-    const data = { ...formData, ...overrides };
-    const scheduleFrequency = data.scheduleFrequency ?? 'DAILY';
-    const scheduleEnabled = data.scheduleEnabled;
+  /* ESC cancels pending confirmation ------------------------------ */
+  useEffect(() => {
+    if (!confirming) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelConfirm();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        void doPlace();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [confirming]);
+
+  /* ---------------- derived ---------------- */
+
+  const fires = useMemo(() => {
+    if (form.cadence !== "DAILY" && form.cadence !== "WEEKLY") return [];
+    return computeFires(form.cadence, form.session, 5);
+  }, [form.cadence, form.session]);
+
+  const summary = useMemo(
+    () => buildSummary(form, quote, fires[0] ?? null),
+    [form, quote, fires],
+  );
+
+  const valid = useMemo(() => {
+    if (!form.accountId) return false;
+    if (!form.symbol.trim()) return false;
+    if (!form.quantity || Number(form.quantity) <= 0) return false;
+    if (
+      (form.orderType === "LIMIT" || form.orderType === "STOP_LIMIT") &&
+      !form.limitPrice
+    )
+      return false;
+    if (
+      (form.orderType === "STOP" || form.orderType === "STOP_LIMIT") &&
+      !form.stopPrice
+    )
+      return false;
+    if (form.orderType === "THRESHOLD" && !form.thresholdPrice) return false;
+    if (form.securityType === "OPTION") {
+      if (!form.strikePrice || !form.expirationDate) return false;
+    }
+    return true;
+  }, [form]);
+
+  /* ---------------- handlers ---------------- */
+
+  function handleSelectSymbol(r: SymbolSearchResult) {
+    symbolJustSelected.current = true;
+    setForm((prev) => ({ ...prev, symbol: r.symbol.toUpperCase() }));
+    setSymbolResults([]);
+    setSymbolDropdownOpen(false);
+  }
+
+  function buildPayload(): Partial<Order> & Record<string, unknown> {
+    const isImmediate = form.cadence === "ONCE" && !form.scheduledFor;
+    const scheduleEnabled =
+      form.cadence === "DAILY" ||
+      form.cadence === "WEEKLY" ||
+      (form.cadence === "ONCE" && !!form.scheduledFor);
+    const scheduleOnce = form.cadence === "ONCE";
+    const scheduleFrequency: "DAILY" | "WEEKLY" | undefined =
+      form.cadence === "DAILY"
+        ? "DAILY"
+        : form.cadence === "WEEKLY"
+          ? "WEEKLY"
+          : undefined;
+
+    let scheduledFor: string | undefined;
+    if (scheduleEnabled) {
+      if (form.scheduledFor) {
+        scheduledFor = new Date(form.scheduledFor).toISOString();
+      } else if (fires[0]) {
+        scheduledFor = fires[0].toISOString();
+      }
+    }
+
     return {
-      ...data,
-      quantity: parseInt(data.quantity as any),
-      limitPrice: data.limitPrice ? parseFloat(data.limitPrice) : undefined,
-      stopPrice: data.stopPrice ? parseFloat(data.stopPrice) : undefined,
-      strikePrice: data.strikePrice ? parseFloat(data.strikePrice) : undefined,
-      expirationDate: data.expirationDate
-        ? (data.expirationDate.match(/^\d{4}-\d{2}-\d{2}$/)
-            ? data.expirationDate
-            : new Date(data.expirationDate).toISOString().slice(0, 10))
-        : undefined,
-      scheduledFor:
-        scheduleEnabled && data.scheduledFor
-          ? new Date(data.scheduledFor).toISOString()
+      accountId: form.accountId,
+      symbol: form.symbol.trim().toUpperCase(),
+      securityType: form.securityType,
+      optionType: form.securityType === "OPTION" ? form.optionType : undefined,
+      strikePrice:
+        form.securityType === "OPTION" && form.strikePrice
+          ? parseFloat(form.strikePrice)
           : undefined,
-      preferredDuration: data.actualDuration,
+      expirationDate:
+        form.securityType === "OPTION" && form.expirationDate
+          ? form.expirationDate
+          : undefined,
+      action: form.action,
+      orderType: form.orderType,
+      quantity:
+        typeof form.quantity === "number"
+          ? form.quantity
+          : parseInt(String(form.quantity), 10),
+      limitPrice:
+        form.orderType !== "MARKET" && form.limitPrice
+          ? parseFloat(form.limitPrice)
+          : undefined,
+      stopPrice: form.stopPrice ? parseFloat(form.stopPrice) : undefined,
+      preferredDuration: "DAY",
+      actualDuration: "DAY",
+      sessionTime: form.session,
+      scheduleEnabled,
       scheduleFrequency,
-      requiresDaily: scheduleEnabled && scheduleFrequency === 'DAILY' && !data.scheduleOnce,
-      status: scheduleEnabled ? 'SCHEDULED' : 'PENDING',
+      scheduleOnce,
+      scheduledFor,
+      onlyFillOnce: form.onlyFillOnce,
+      requiresDaily: scheduleEnabled && form.cadence === "DAILY",
+      status: isImmediate
+        ? "PENDING"
+        : scheduleEnabled
+          ? "SCHEDULED"
+          : "PENDING",
       retryCount: 0,
       maxRetries: 3,
-      thresholdEnabled: data.orderType === 'THRESHOLD' || data.thresholdEnabled,
-      thresholdPrice: data.thresholdPrice ? parseFloat(data.thresholdPrice) : undefined,
-      thresholdPriceSource: data.thresholdPriceSource,
-      thresholdQuantity: data.thresholdQuantity,
-      thresholdPollIntervalMs: data.thresholdPollIntervalMs,
-      thresholdLogFile: data.thresholdLogFile || undefined,
-      sellOrderEnabled: data.sellOrderEnabled,
-      sellOrderThresholdPrice: data.sellOrderThresholdPrice
-        ? parseFloat(data.sellOrderThresholdPrice)
+      thresholdEnabled:
+        form.cadence === "THRESHOLD" || form.orderType === "THRESHOLD",
+      thresholdPrice: form.thresholdPrice
+        ? parseFloat(form.thresholdPrice)
         : undefined,
-      sellOrderThresholdPriceSource: data.sellOrderThresholdPriceSource,
-      sellOrderQuantity: data.sellOrderQuantity,
+      thresholdPriceSource: form.thresholdPriceSource,
+      thresholdQuantity: form.thresholdQuantity,
+      thresholdPollIntervalMs: form.thresholdPollIntervalMs,
+      thresholdLogFile: form.thresholdLogFile || undefined,
+      notes: form.notes || undefined,
     };
-  };
+  }
 
-  const buildDraftForHistory = (data: typeof formData): OrderFormDraft => ({
-    accountId: data.accountId,
-    symbol: data.symbol,
-    securityType: data.securityType,
-    optionType: data.optionType,
-    strikePrice: data.strikePrice ? parseFloat(data.strikePrice) : undefined,
-    expirationDate: data.expirationDate || undefined,
-    action: data.action,
-    orderType: data.orderType,
-    quantity: typeof data.quantity === 'number' ? data.quantity : parseInt(String(data.quantity), 10),
-    limitPrice: data.limitPrice || undefined,
-    stopPrice: data.stopPrice || undefined,
-    preferredDuration: data.actualDuration,
-    actualDuration: data.actualDuration,
-    sessionTime: data.sessionTime,
-    scheduleEnabled: data.scheduleEnabled,
-    scheduleFrequency: data.scheduleFrequency,
-    scheduleOnce: data.scheduleOnce,
-    scheduledFor: data.scheduledFor || undefined,
-    notes: data.notes || undefined,
-  });
+  function buildDraftForHistory(): OrderFormDraft {
+    return {
+      accountId: form.accountId,
+      symbol: form.symbol,
+      securityType: form.securityType,
+      optionType: form.optionType,
+      strikePrice: form.strikePrice ? parseFloat(form.strikePrice) : undefined,
+      expirationDate: form.expirationDate || undefined,
+      action: form.action,
+      orderType: form.orderType,
+      quantity:
+        typeof form.quantity === "number"
+          ? form.quantity
+          : parseInt(String(form.quantity), 10),
+      limitPrice: form.limitPrice || undefined,
+      stopPrice: form.stopPrice || undefined,
+      preferredDuration: "DAY",
+      actualDuration: "DAY",
+      sessionTime: form.session,
+      scheduleEnabled:
+        form.cadence === "DAILY" ||
+        form.cadence === "WEEKLY" ||
+        (form.cadence === "ONCE" && !!form.scheduledFor),
+      scheduleFrequency:
+        form.cadence === "DAILY"
+          ? "DAILY"
+          : form.cadence === "WEEKLY"
+            ? "WEEKLY"
+            : undefined,
+      scheduleOnce: form.cadence === "ONCE",
+      scheduledFor: form.scheduledFor || undefined,
+      notes: form.notes || undefined,
+      onlyFillOnce: form.onlyFillOnce,
+    };
+  }
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccessMessage('');
-    setSubmitting(true);
-
-    try {
-      const orderData = buildOrderPayload();
-      await createOrder(orderData);
-      setSuccessMessage('Order created successfully!');
-      setAutoPricingError('');
-
-      onOrderCreated?.(buildDraftForHistory(formData));
-
-      // Reset form
-      setFormData({
-        ...initialFormState,
-        accountId: formData.accountId,
-        thresholdPriceSource: formData.action === 'BUY' ? 'BID' : 'ASK',
-        sellOrderThresholdPriceSource: 'ASK',
+  function startConfirm() {
+    if (!valid || placing) return;
+    setError("");
+    setSuccess("");
+    setConfirming(true);
+    setConfirmCountdown(3);
+    if (confirmTimerRef.current) clearInterval(confirmTimerRef.current);
+    confirmTimerRef.current = setInterval(() => {
+      setConfirmCountdown((c) => {
+        if (c <= 1) {
+          if (confirmTimerRef.current) clearInterval(confirmTimerRef.current);
+          void doPlace();
+          return 0;
+        }
+        return c - 1;
       });
-    } catch (err: any) {
-      setError(err.message || 'Failed to create order');
-      setSuccessMessage('');
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    }, 1000);
+  }
 
-  const handleSendNow = async () => {
-    setError('');
-    setSuccessMessage('');
-    setSendingNow(true);
+  function cancelConfirm() {
+    if (confirmTimerRef.current) clearInterval(confirmTimerRef.current);
+    setConfirming(false);
+    setConfirmCountdown(0);
+  }
 
+  async function doPlace() {
+    if (confirmTimerRef.current) clearInterval(confirmTimerRef.current);
+    setConfirming(false);
+    setConfirmCountdown(0);
+    if (!valid || placing || placingRef.current) return;
+    placingRef.current = true;
     try {
-      const orderData = buildOrderPayload({
-        scheduleEnabled: false,
-        scheduleOnce: false,
-        scheduledFor: '',
-      });
-      const created = await createOrder(orderData);
-      onOrderCreated?.(buildDraftForHistory(formData));
+      const payload = buildPayload();
+      let isImmediate = form.cadence === "ONCE" && !form.scheduledFor;
+      let autoScheduled = false;
 
-      const result = await submitOrder(created.id);
-      if (!result.success) {
-        throw new Error(result.order?.lastError || 'Order submission failed');
+      // E*TRADE rejects EXTENDED orders outside 7 AM - 8 PM ET.
+      if (isImmediate && form.session === "EXTENDED") {
+        const etHour = parseInt(
+          new Intl.DateTimeFormat("en-US", {
+            timeZone: "America/New_York",
+            hour: "numeric",
+            hour12: false,
+          }).format(new Date()),
+          10,
+        );
+        if (etHour >= 20 || etHour < 7) {
+          const base =
+            etHour >= 20
+              ? nextTradingDay(new Date())
+              : todayOrNextTradingDay(new Date());
+          const nextFire = etInstantAt(base, 7, 0);
+          payload.scheduledFor = nextFire.toISOString();
+          payload.scheduleEnabled = true;
+          payload.scheduleOnce = true;
+          isImmediate = false;
+          autoScheduled = true;
+        }
       }
 
-      setSuccessMessage(
-        `Order sent now! E*TRADE Order ID: ${result.order.etradeOrderId || 'Pending'}`
-      );
-      setAutoPricingError('');
+      // E*TRADE rejects market orders ~4:00-4:05 PM ET (post-close transition)
+      if (isImmediate && form.orderType === "MARKET") {
+        const now = new Date();
+        const etParts = new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/New_York",
+          hour: "numeric",
+          minute: "numeric",
+          hour12: false,
+        }).formatToParts(now);
+        const h = parseInt(
+          etParts.find((p) => p.type === "hour")?.value ?? "0",
+          10,
+        );
+        const m = parseInt(
+          etParts.find((p) => p.type === "minute")?.value ?? "0",
+          10,
+        );
+        if (h === 16 && m < 5) {
+          const price = quote?.last ?? quote?.ask ?? quote?.bid ?? 0;
+          setPmWarning({
+            action: form.action,
+            qty: parseInt(form.quantity, 10) || 0,
+            symbol: form.symbol,
+            price,
+          });
+          placingRef.current = false;
+          return;
+        }
+      }
 
-      // Reset form
-      setFormData({
-        ...initialFormState,
-        accountId: formData.accountId,
-        thresholdPriceSource: formData.action === 'BUY' ? 'BID' : 'ASK',
-        sellOrderThresholdPriceSource: 'ASK',
-      });
-      setScheduledForTouched(false);
+      const created = await createMut.mutateAsync(payload as any);
+      onOrderCreated?.(buildDraftForHistory());
+
+      const shouldSendNow = isImmediate ||
+        (form.cadence === "DAILY" || form.cadence === "WEEKLY");
+
+      if (shouldSendNow && !autoScheduled) {
+        const result = await submitMut.mutateAsync(created.id);
+        if (!result.success) {
+          throw new Error(result.order?.lastError || "Order submission failed");
+        }
+        const eid = result.order.etradeOrderId ?? "pending";
+        const recurLabel = !isImmediate
+          ? ` (+ scheduled ${(form.cadence ?? "").toLowerCase()})`
+          : "";
+        setSuccess(`Sent: E*TRADE id ${eid}${recurLabel}`);
+      } else if (autoScheduled && payload.scheduledFor) {
+        setSuccess(
+          `Scheduled for ${formatHumanET(new Date(payload.scheduledFor))} ET (extended hours closed)`,
+        );
+      } else if (payload.scheduledFor) {
+        setSuccess(
+          `Scheduled for ${formatHumanET(new Date(payload.scheduledFor))} ET`,
+        );
+      } else {
+        setSuccess("Order created.");
+      }
+      // Reset preserving account.
+      setForm({ ...initial, accountId: form.accountId });
     } catch (err: any) {
-      setError(err.message || 'Failed to send order now');
-      setSuccessMessage('');
+      setError(err?.message ?? "Failed to create order");
     } finally {
-      setSendingNow(false);
+      placingRef.current = false;
     }
+  }
+
+  async function placeAsExtended() {
+    setPmWarning(null);
+    const price = pmWarning?.price ?? quote?.last ?? quote?.ask ?? 0;
+    if (!price) {
+      setError("No price available for limit order");
+      return;
+    }
+    setForm((p) => ({
+      ...p,
+      sessionTime: "EXTENDED" as any,
+      orderType: "LIMIT" as any,
+      limitPrice: price.toFixed(2),
+    }));
+    setSuccess(
+      "Converted to EXTENDED LIMIT @ $" +
+        price.toFixed(2) +
+        " \u2014 tap Place Order to send.",
+    );
+  }
+
+  async function placeForTomorrow() {
+    setPmWarning(null);
+    placingRef.current = true;
+    try {
+      const payload = buildPayload();
+      const nextDay = nextTradingDay(new Date());
+      const fireAt = etInstantAt(nextDay, 9, 30);
+      payload.scheduledFor = fireAt.toISOString();
+      payload.scheduleEnabled = true;
+      payload.scheduleOnce = true;
+      const created = await createMut.mutateAsync(payload as any);
+      onOrderCreated?.(buildDraftForHistory());
+      setSuccess(`Scheduled for ${formatHumanET(fireAt)} ET`);
+      setForm({ ...initial, accountId: form.accountId });
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to schedule order");
+    } finally {
+      placingRef.current = false;
+    }
+  }
+
+  const optionSpreadLine =
+    form.securityType === "OPTION" && form.symbol.trim() ? (
+      <div
+        id="order-option-spread"
+        style={{
+          marginTop: 6,
+          fontSize: 11,
+          fontFamily:
+            "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+          color: "var(--text-dim)",
+          minHeight: 16,
+        }}
+      >
+        {form.expirationDate && form.strikePrice ? (
+          optionQuoteLoading ? (
+            <span>option spread: loading...</span>
+          ) : optionQuote ? (
+            <>
+              <span>
+                {form.optionType} {form.strikePrice} {form.expirationDate}
+              </span>
+              <Sep />
+              bid{" "}
+              <NumColored
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  if (optionQuote.bid > 0)
+                    setForm((p) => ({
+                      ...p,
+                      limitPrice: optionQuote.bid.toFixed(2),
+                      orderType:
+                        p.orderType === "MARKET" ? "LIMIT" : p.orderType,
+                    }));
+                }}
+                style={{
+                  cursor: optionQuote.bid > 0 ? "pointer" : "default",
+                  textDecoration: optionQuote.bid > 0 ? "underline" : "none",
+                }}
+              >
+                {optionQuote.bid > 0 ? `$${optionQuote.bid.toFixed(2)}` : "-"}
+              </NumColored>
+              <Sep />
+              ask{" "}
+              <NumColored
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  if (optionQuote.ask > 0)
+                    setForm((p) => ({
+                      ...p,
+                      limitPrice: optionQuote.ask.toFixed(2),
+                      orderType:
+                        p.orderType === "MARKET" ? "LIMIT" : p.orderType,
+                    }));
+                }}
+                style={{
+                  cursor: optionQuote.ask > 0 ? "pointer" : "default",
+                  textDecoration: optionQuote.ask > 0 ? "underline" : "none",
+                }}
+              >
+                {optionQuote.ask > 0 ? `$${optionQuote.ask.toFixed(2)}` : "-"}
+              </NumColored>
+              {optionQuote.bid > 0 && optionQuote.ask > 0 && (
+                <>
+                  <Sep />
+                  spread ${(optionQuote.ask - optionQuote.bid).toFixed(2)}
+                </>
+              )}
+              <Sep />
+              theo {theoretical != null ? `$${theoretical.toFixed(2)}` : "-"}
+              {optionQuote.impliedVolatility != null && (
+                <>
+                  {" "}
+                  <span style={{ color: "var(--text-dim)" }}>
+                    IV {(optionQuote.impliedVolatility * 100).toFixed(1)}%
+                  </span>
+                </>
+              )}
+            </>
+          ) : (
+            <span>{optionQuoteError || "option spread unavailable"}</span>
+          )
+        ) : (
+          <span>select strike and expiration for option spread</span>
+        )}
+      </div>
+    ) : null;
+
+  const setAtmStrike = async () => {
+    if (!form.symbol.trim() || !quote || !quote.last) return;
+    const sym = form.symbol.trim().toUpperCase();
+    const exp = form.expirationDate || undefined;
+    try {
+      const chain = await fetchOptionsChain(sym, exp);
+      const legs = form.optionType === "CALL" ? chain?.calls : chain?.puts;
+      if (!Array.isArray(legs) || legs.length === 0) return;
+      const spot = quote.last;
+      const liquid = legs.filter(
+        (l: any) => (l.openInterest ?? 0) >= 10 || (l.volume ?? 0) >= 5,
+      );
+      const pool = liquid.length > 0 ? liquid : legs;
+      let best = pool[0];
+      let bestDist = Math.abs(Number(best.strikePrice) - spot);
+      for (const l of pool) {
+        const d = Math.abs(Number(l.strikePrice) - spot);
+        if (d < bestDist) { best = l; bestDist = d; }
+      }
+      setForm((p) => ({ ...p, strikePrice: String(best.strikePrice) }));
+    } catch {}
   };
 
+  /* ---------------- render ---------------- */
+
   return (
-    <div className="w-full max-w-md mx-auto px-2">
-      <h2 className="text-lg font-semibold text-white mb-4">Create Order</h2>
+    <div
+      style={{
+        maxWidth: 720,
+        margin: "0 auto",
+        padding: "0 12px 120px",
+        position: "relative",
+      }}
+    >
+      <h2
+        style={{
+          color: "var(--text)",
+          fontSize: 18,
+          fontWeight: 600,
+          margin: "0 0 14px",
+        }}
+      >
+        Create Order
+      </h2>
 
-      {error && (
-        <div className="mb-3 p-3 bg-red-500/20 border border-red-500 rounded-lg text-red-400 text-sm">
-          {error}
-        </div>
-      )}
+      {error && <Banner kind="error">{error}</Banner>}
+      {success && <Banner kind="ok">{success}</Banner>}
 
-      {successMessage && (
-        <div className="mb-3 p-3 bg-green-500/20 border border-green-500 rounded-lg text-green-400 text-sm">
-          {successMessage}
-        </div>
-      )}
-
-      {accountsError && (
-        <div className="mb-3 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-200 text-xs">
-          {accountsError}. Enter an Account ID manually below.
-        </div>
-      )}
-
-      {autoPricingError && (
-        <div className="mb-3 p-3 bg-amber-500/20 border border-amber-500 rounded-lg text-amber-100 text-xs">
-          {autoPricingError}
-        </div>
-      )}
-
-      {durationNotice && (
-        <div className="mb-3 p-3 bg-blue-500/20 border border-blue-500/50 rounded-lg text-blue-300 text-xs flex items-center gap-2">
-          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-          {durationNotice}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} className="bg-slate-800/80 rounded-xl p-5 space-y-5 border border-slate-700/50">
-        <section className="space-y-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-700/50 pb-2">
-            Account & Symbol
-          </h3>
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              Account
-            </label>
-            {accountsLoading ? (
-              <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-slate-400 text-sm">
-                Loading...
-              </div>
-            ) : accounts.length > 0 ? (
-              <select
-                required
-                value={formData.accountId}
-                onChange={(e) => {
-                  const value = e.target.value;
-                  setFormData({ ...formData, accountId: value });
-                  if (typeof window !== 'undefined') {
-                    window.localStorage.setItem('selectedAccountIdKey', value);
-                  }
-                }}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-              >
-                <option value="" disabled>
-                  Select account
+      <div
+        style={{
+          background: "var(--bg-1)",
+          border: "1px solid var(--bg-3)",
+          borderRadius: 12,
+          padding: 18,
+          display: "flex",
+          flexDirection: "column",
+          gap: 22,
+        }}
+      >
+        {/* Account ------------------------------------------------ */}
+        {accounts.length > 1 ? (
+          <Field label="Account" htmlFor="order-account">
+            <select
+              id="order-account"
+              value={form.accountId}
+              onChange={(e) => {
+                const v = e.target.value;
+                setForm((p) => ({ ...p, accountId: v }));
+                if (typeof window !== "undefined")
+                  window.localStorage.setItem("selectedAccountIdKey", v);
+              }}
+              style={selectStyle}
+            >
+              <option value="" disabled>
+                Select account
+              </option>
+              {accounts.map((a) => (
+                <option key={a.accountIdKey} value={a.accountIdKey}>
+                  {a.nickname} — {a.name || "Unnamed"} ({a.type})
                 </option>
-                {accounts.map((account) => (
-                  <option key={account.accountIdKey} value={account.accountIdKey}>
-                    {account.nickname} — {account.name || 'Unnamed'} ({account.type}
-                    {account.status !== 'ACTIVE' ? `, ${account.status}` : ''})
-                    {account.isDefaultFromEnv ? ' [from .env ACCOUNT]' : ''}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input
-                type="text"
-                required
-                value={formData.accountId}
-                onChange={(e) =>
-                  setFormData({
-                    ...formData,
-                    accountId: e.target.value,
-                  })
-                }
-                placeholder="E*TRADE account key"
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-              />
-            )}
-          </div>
+              ))}
+            </select>
+          </Field>
+        ) : null}
 
-          <div className="relative" ref={symbolInputRef}>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              Symbol
-            </label>
+        {/* Symbol ------------------------------------------------- */}
+        <Field label="Symbol" htmlFor="order-symbol">
+          <div ref={symbolWrapRef} style={{ position: "relative" }}>
             <input
+              id="order-symbol"
+              autoFocus
               type="text"
-              required
-              value={formData.symbol}
+              value={form.symbol}
+              autoCapitalize="characters"
+              autoComplete="off"
+              autoCorrect="off"
+              spellCheck={false}
               onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  symbol: e.target.value.toUpperCase(),
-                })
+                setForm((p) => ({ ...p, symbol: e.target.value.toUpperCase() }))
               }
-              onKeyDown={(e) => {
-                const key = e.key;
-                if (key === 'Enter') {
-                  // Use the typed symbol rather than submitting the form.
-                  e.preventDefault();
-                  const query = formData.symbol.trim().toUpperCase();
-                  if (!query) return;
-
-                  const exact = symbolResults.find(
-                    (r) => r.symbol.toUpperCase() === query
-                  );
-                  if (exact) {
-                    handleSelectSymbol(exact);
-                  } else {
-                    setFormData((prev) => ({
-                      ...prev,
-                      symbol: query,
-                    }));
-                    setShowSymbolDropdown(false);
-                  }
-                } else if (key === 'Tab') {
-                  // When tabbing away, accept the typed symbol and close dropdown.
-                  const query = formData.symbol.trim().toUpperCase();
-                  if (query) {
-                    setFormData((prev) => ({
-                      ...prev,
-                      symbol: query,
-                    }));
-                  }
-                  setShowSymbolDropdown(false);
-                }
-              }}
-              onFocus={() => {
-                if (symbolResults.length > 0) {
-                  setShowSymbolDropdown(true);
-                }
-              }}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
+              placeholder="AMD"
+              style={{ ...inputStyle, fontWeight: 600 }}
             />
-            {symbolSearchLoading && (
-              <div className="absolute right-3 top-9 text-xs text-slate-400">
-                Searching...
-              </div>
-            )}
-            {symbolSearchError && (
-              <div className="mt-1 text-xs text-amber-300">
-                {symbolSearchError}
-              </div>
-            )}
-            {showSymbolDropdown && symbolResults.length > 0 && (
-              <div className="absolute z-20 mt-1 w-full max-h-48 overflow-auto rounded bg-slate-800 border border-slate-700 shadow-lg">
-                {symbolResults.map((result) => (
+            {symbolDropdownOpen && symbolResults.length > 0 && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: "calc(100% + 4px) 0 auto 0",
+                  zIndex: 20,
+                  maxHeight: 200,
+                  overflow: "auto",
+                  background: "var(--bg-2)",
+                  border: "1px solid var(--bg-3)",
+                  borderRadius: 8,
+                  boxShadow: "0 12px 32px rgba(0,0,0,0.45)",
+                }}
+              >
+                {symbolResults.map((r) => (
                   <button
-                    key={`${result.symbol}-${result.exchange}-${result.securityType}`}
+                    key={`${r.symbol}-${r.exchange}-${r.securityType}`}
                     type="button"
                     onMouseDown={(e) => {
                       e.preventDefault();
-                      handleSelectSymbol(result);
+                      handleSelectSymbol(r);
                     }}
-                    className="w-full text-left px-3 py-2 text-sm hover:bg-slate-700 text-slate-100 flex flex-col"
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 12px",
+                      background: "transparent",
+                      border: 0,
+                      cursor: "pointer",
+                      color: "var(--text)",
+                      fontSize: 13,
+                    }}
                   >
-                    <span className="font-semibold">
-                      {result.symbol}{' '}
-                      {result.exchange && (
-                        <span className="text-xs text-slate-400">
-                          ({result.exchange})
-                        </span>
-                      )}
-                    </span>
-                    {result.companyName && (
-                      <span className="text-xs text-slate-300">
-                        {result.companyName}
+                    <strong>{r.symbol}</strong>
+                    {r.companyName ? (
+                      <span style={{ color: "var(--text-dim)" }}>
+                        {" "}
+                        — {r.companyName}
                       </span>
-                    )}
-                    {result.securityType && (
-                      <span className="text-[10px] uppercase text-slate-500 mt-0.5">
-                        {result.securityType}
-                      </span>
-                    )}
+                    ) : null}
                   </button>
                 ))}
               </div>
             )}
-          </div>
-        </section>
-
-        <section className="space-y-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-700/50 pb-2">
-            Security & order
-          </h3>
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              Security type
-            </label>
-            <select
-              value={formData.securityType}
-              onChange={(e) =>
-                setFormData({
-                  ...formData,
-                  securityType: e.target.value as 'EQUITY' | 'OPTION',
-                })
-              }
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-            >
-              <option value="EQUITY">Equity</option>
-              <option value="OPTION">Option</option>
-            </select>
+            {symbolError && (
+              <div
+                style={{ marginTop: 6, color: "var(--accent)", fontSize: 11 }}
+              >
+                {symbolError}
+              </div>
+            )}
           </div>
 
-          {formData.securityType === 'OPTION' && (
-            <>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Call / Put
-                </label>
-                <select
-                  value={formData.optionType}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      optionType: e.target.value as 'CALL' | 'PUT',
-                    })
-                  }
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+          {/* Live quote line */}
+          <div
+            style={{
+              marginTop: 8,
+              fontSize: 12,
+              fontFamily:
+                "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+              color: "var(--text-dim)",
+              minHeight: 18,
+            }}
+          >
+            {form.symbol.trim() && quote ? (
+              <>
+                <strong style={{ color: "var(--text)" }}>
+                  {form.symbol.trim().toUpperCase()}
+                </strong>
+                <Sep />
+                bid{" "}
+                <NumColored
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    if (quote.bid > 0)
+                      setForm((p) => ({
+                        ...p,
+                        limitPrice: quote.bid.toFixed(2),
+                        orderType:
+                          p.orderType === "MARKET" ? "LIMIT" : p.orderType,
+                      }));
+                  }}
+                  style={{
+                    cursor: quote.bid > 0 ? "pointer" : "default",
+                    textDecoration: quote.bid > 0 ? "underline" : "none",
+                  }}
                 >
-                  <option value="CALL">CALL</option>
-                  <option value="PUT">PUT</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Expiration
-                </label>
-                {optionExpirationsLoading ? (
-                  <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-slate-400 text-sm">
-                    Loading expirations…
-                  </div>
-                ) : optionExpirationsError ? (
-                  <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-amber-400 text-sm">
-                    {optionExpirationsError}
-                  </div>
-                ) : optionExpirations.length > 0 ? (
-                  <select
-                    value={formData.expirationDate}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        expirationDate: e.target.value,
-                      })
-                    }
-                    className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="">Select expiration</option>
-                    {optionExpirations.map((date) => (
-                      <option key={date} value={date}>
-                        {date}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <div className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-slate-400 text-sm">
-                    Enter a symbol and select Option to load expirations
-                  </div>
-                )}
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Strike
-                </label>
-                <input
-                  type="number"
-                  step="0.01"
-                  placeholder="Strike price"
-                  value={formData.strikePrice}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      strikePrice: e.target.value,
-                    })
-                  }
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                />
-              </div>
-            </>
-          )}
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              Action
-            </label>
-            <select
-              value={formData.action}
-              onChange={(e) => {
-                const newAction = e.target.value as FormState['action'];
-                setFormData({
-                  ...formData,
-                  action: newAction,
-                  // Update default price source when action changes for threshold orders
-                  thresholdPriceSource:
-                    formData.orderType === 'THRESHOLD'
-                      ? newAction === 'BUY'
-                        ? 'BID'
-                        : 'ASK'
-                      : formData.thresholdPriceSource,
-                });
-              }}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-blue-500"
-            >
-              <option value="BUY">BUY</option>
-              <option value="SELL">SELL</option>
-              <option value="BUY_TO_COVER">BUY TO COVER</option>
-              <option value="SELL_SHORT">SELL SHORT</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              Order type
-            </label>
-            <select
-              value={formData.orderType}
-              onChange={(e) => {
-                const newOrderType = e.target.value as FormState['orderType'];
-                setFormData({
-                  ...formData,
-                  orderType: newOrderType,
-                  thresholdEnabled: newOrderType === 'THRESHOLD',
-                  // Set default price source based on action when switching to THRESHOLD
-                  thresholdPriceSource:
-                    newOrderType === 'THRESHOLD'
-                      ? formData.action === 'BUY'
-                        ? 'BID'
-                        : 'ASK'
-                      : formData.thresholdPriceSource,
-                });
-              }}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-            >
-              <option value="MARKET">MARKET</option>
-              <option value="LIMIT">LIMIT</option>
-              <option value="STOP">STOP</option>
-              <option value="STOP_LIMIT">STOP LIMIT</option>
-              <option value="THRESHOLD">THRESHOLD</option>
-            </select>
-          </div>
-
-          {formData.orderType === 'THRESHOLD' && (
-            <>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Threshold price
-                </label>
-                <input
-                  type="number"
-                  required
-                  step="0.01"
-                  placeholder="Target price"
-                  value={formData.thresholdPrice}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      thresholdPrice: e.target.value,
-                    })
-                  }
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Price source
-                </label>
-                <select
-                  value={formData.thresholdPriceSource}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      thresholdPriceSource: e.target.value as 'BID' | 'ASK' | 'LAST',
-                    })
-                  }
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                  {quote.bid > 0 ? `$${quote.bid.toFixed(2)}` : "—"}
+                </NumColored>
+                <Sep />
+                ask{" "}
+                <NumColored
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    if (quote.ask > 0)
+                      setForm((p) => ({
+                        ...p,
+                        limitPrice: quote.ask.toFixed(2),
+                        orderType:
+                          p.orderType === "MARKET" ? "LIMIT" : p.orderType,
+                      }));
+                  }}
+                  style={{
+                    cursor: quote.ask > 0 ? "pointer" : "default",
+                    textDecoration: quote.ask > 0 ? "underline" : "none",
+                  }}
                 >
-                  <option value="BID">BID</option>
-                  <option value="ASK">ASK</option>
-                  <option value="LAST">LAST</option>
-                </select>
-              </div>
+                  {quote.ask > 0 ? `$${quote.ask.toFixed(2)}` : "—"}
+                </NumColored>
+                <Sep />
+                last{" "}
+                <NumColored>
+                  {quote.last > 0 ? `$${quote.last.toFixed(2)}` : "—"}
+                </NumColored>
+                <Sep />
+                <span>
+                  session:{" "}
+                  {form.session === "EXTENDED" ? "extended" : "regular"}
+                </span>
+              </>
+            ) : form.symbol.trim() ? (
+              <span>fetching quote…</span>
+            ) : (
+              <span>type a symbol to see the live quote</span>
+            )}
+          </div>
+        </Field>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Threshold quantity
-                </label>
-                <input
-                  type="number"
-                  required
-                  min="1"
-                  value={formData.thresholdQuantity}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      thresholdQuantity: parseInt(e.target.value) || 1,
-                    })
-                  }
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                />
-              </div>
+        {/* Security type ----------------------------------------- */}
+        <Field label="Security type" htmlFor="order-security-type">
+          <select
+            id="order-security-type"
+            value={form.securityType}
+            onChange={(e) =>
+              setForm((p) => ({
+                ...p,
+                securityType: e.target.value as SecurityType,
+              }))
+            }
+            style={selectStyle}
+          >
+            <option value="EQUITY">Equity</option>
+            <option value="OPTION">Option</option>
+            <option value="MUTUAL_FUND">Mutual fund</option>
+            <option value="MONEY_MARKET_FUND">Money market fund</option>
+          </select>
+        </Field>
 
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Poll interval (ms)
-                </label>
-                <input
-                  type="number"
-                  min="100"
-                  step="100"
-                  value={formData.thresholdPollIntervalMs}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      thresholdPollIntervalMs: parseInt(e.target.value) || 1000,
-                    })
-                  }
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                />
-                <p className="text-xs text-slate-500 mt-1">
-                  How often to check price (default: 1000ms = 1 second)
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Log file path (optional)
-                </label>
-                <input
-                  type="text"
-                  placeholder="logs/quotes-SYMBOL-timestamp.csv"
-                  value={formData.thresholdLogFile}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      thresholdLogFile: e.target.value,
-                    })
-                  }
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                />
-                <p className="text-xs text-slate-500 mt-1">
-                  Auto-generated if empty: logs/quotes-{formData.symbol || 'SYMBOL'}-timestamp.csv
-                </p>
-              </div>
-
-              <div className="flex items-center space-x-2">
-                <input
-                  type="checkbox"
-                  id="sellOrderEnabled"
-                  checked={formData.sellOrderEnabled}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      sellOrderEnabled: e.target.checked,
-                    })
-                  }
-                  className="w-4 h-4 bg-slate-700 border-slate-600 rounded text-blue-600 focus:ring-blue-500"
-                />
-                <label htmlFor="sellOrderEnabled" className="text-xs font-medium text-slate-400">
-                  Enable sell order after buy executes
-                </label>
-              </div>
-
-              {formData.sellOrderEnabled && formData.action === 'BUY' && (
-                <>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">
-                      Sell threshold price
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      placeholder="Sell target price"
-                      value={formData.sellOrderThresholdPrice}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          sellOrderThresholdPrice: e.target.value,
-                        })
-                      }
-                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">
-                      Sell price source
-                    </label>
-                    <select
-                      value={formData.sellOrderThresholdPriceSource}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          sellOrderThresholdPriceSource: e.target.value as 'BID' | 'ASK' | 'LAST',
-                        })
-                      }
-                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+        {form.securityType === "OPTION" && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "80px 1fr 1fr",
+              gap: 12,
+            }}
+          >
+            <Field label="C / P" htmlFor="order-option-type">
+              <div style={{ display: "flex", gap: 0, background: "var(--bg-2)", border: "1px solid var(--bg-3)", borderRadius: 8, padding: 2 }}>
+                {(["CALL", "PUT"] as const).map((v) => {
+                  const active = form.optionType === v;
+                  return (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setForm((p) => ({ ...p, optionType: v }))}
+                      style={{
+                        flex: 1,
+                        padding: "8px 2px",
+                        fontSize: 11,
+                        fontWeight: active ? 700 : 500,
+                        border: 0,
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        background: active ? "color-mix(in oklab, var(--info) 22%, transparent)" : "transparent",
+                        color: active ? "var(--info)" : "var(--text-dim)",
+                      }}
                     >
-                      <option value="BID">BID</option>
-                      <option value="ASK">ASK</option>
-                      <option value="LAST">LAST</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1">
-                      Sell quantity
-                    </label>
-                    <input
-                      type="number"
-                      min="1"
-                      value={formData.sellOrderQuantity}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          sellOrderQuantity: parseInt(e.target.value) || 1,
-                        })
-                      }
-                      className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                </>
+                      {v === "CALL" ? "C" : "P"}
+                    </button>
+                  );
+                })}
+              </div>
+            </Field>
+            <Field label="Strike" htmlFor="order-strike">
+              <div style={{ display: "flex", gap: 4 }}>
+                <input
+                  id="order-strike"
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={form.strikePrice}
+                  onChange={(e) =>
+                    setForm((p) => ({ ...p, strikePrice: e.target.value }))
+                  }
+                  style={{ ...inputStyle, flex: 1, minWidth: 0 }}
+                  placeholder="100"
+                />
+                <button
+                  type="button"
+                  onClick={setAtmStrike}
+                  disabled={!form.symbol.trim() || !quote}
+                  title="Set strike to nearest ATM with liquidity"
+                  style={{
+                    padding: "8px 8px",
+                    borderRadius: 8,
+                    border: "1px solid var(--bg-3)",
+                    background: "var(--bg-2)",
+                    color: !form.symbol.trim() || !quote ? "var(--text-dim)" : "var(--info)",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor: !form.symbol.trim() || !quote ? "not-allowed" : "pointer",
+                    whiteSpace: "nowrap",
+                    flexShrink: 0,
+                  }}
+                >
+                  ATM
+                </button>
+              </div>
+            </Field>
+            <Field label="Expiration" htmlFor="order-expiration">
+              {optionExpirations.length > 0 ? (
+                <select
+                  id="order-expiration"
+                  value={form.expirationDate}
+                  onChange={(e) =>
+                    setForm((p) => ({ ...p, expirationDate: e.target.value }))
+                  }
+                  style={selectStyle}
+                >
+                  <option value="">Select…</option>
+                  {optionExpirations.map((d) => (
+                    <option key={d} value={d}>
+                      {d}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  id="order-expiration"
+                  type="date"
+                  value={form.expirationDate}
+                  onChange={(e) =>
+                    setForm((p) => ({ ...p, expirationDate: e.target.value }))
+                  }
+                  style={inputStyle}
+                />
               )}
-            </>
-          )}
-        </section>
+              {optionExpirationsError && (
+                <div
+                  style={{ marginTop: 6, color: "var(--accent)", fontSize: 11 }}
+                >
+                  {optionExpirationsError}
+                </div>
+              )}
+            </Field>
+          </div>
+        )}
 
-        <section className="space-y-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-700/50 pb-2">
-            Quantity & price
-          </h3>
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              Quantity
-            </label>
+        {/* Action ------------------------------------------------- */}
+        <Field label="Action">
+          <Segmented
+            ariaLabel="Action"
+            options={[
+              { value: "BUY", label: "BUY" },
+              { value: "SELL", label: "SELL" },
+              { value: "SELL_SHORT", label: "SHORT" },
+              { value: "BUY_TO_COVER", label: "COVER" },
+            ]}
+            value={form.action}
+            onChange={(v) => setForm((p) => ({ ...p, action: v as Action }))}
+            colorize={(v) =>
+              v === "BUY" || v === "BUY_TO_COVER" ? "var(--ok)" : "var(--bad)"
+            }
+          />
+        </Field>
+
+        {/* Order type -------------------------------------------- */}
+        <Field label="Order type" htmlFor="order-type">
+          <div style={{ display: "flex", gap: 0, background: "var(--bg-2)", border: "1px solid var(--bg-3)", borderRadius: 8, padding: 3 }}>
+            {([["MARKET", "MARKET"], ["LIMIT", "LIMIT"], ["STOP", "STOP"], ["STOP_LIMIT", "STOP LMT"], ["THRESHOLD", "THRESH"]] as const).map(([val, label]) => {
+              const active = form.orderType === val;
+              return (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => setForm((p) => ({ ...p, orderType: val as OrderType }))}
+                  style={{
+                    flex: 1,
+                    padding: "8px 4px",
+                    fontSize: 11,
+                    fontWeight: active ? 700 : 500,
+                    border: 0,
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    transition: "background 0.15s",
+                    background: active ? "color-mix(in oklab, var(--info) 22%, transparent)" : "transparent",
+                    color: active ? "var(--info)" : "var(--text-dim)",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+
+        {(form.orderType === "LIMIT" || form.orderType === "STOP_LIMIT") && (
+          <Field label="Limit price" htmlFor="order-limit-price">
             <input
+              id="order-limit-price"
               type="number"
-              required
-              min="1"
-              value={formData.quantity}
+              inputMode="decimal"
+              step="0.01"
+              value={form.limitPrice}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, limitPrice: e.target.value }))
+              }
+              style={inputStyle}
+              aria-describedby={
+                optionSpreadLine ? "order-option-spread" : undefined
+              }
+            />
+            {optionSpreadLine}
+          </Field>
+        )}
+
+        {(form.orderType === "STOP" || form.orderType === "STOP_LIMIT") && (
+          <Field label="Stop price" htmlFor="order-stop-price">
+            <input
+              id="order-stop-price"
+              type="number"
+              inputMode="decimal"
+              step="0.01"
+              value={form.stopPrice}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, stopPrice: e.target.value }))
+              }
+              style={inputStyle}
+            />
+          </Field>
+        )}
+
+        {form.orderType === "THRESHOLD" && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr",
+              gap: 12,
+            }}
+          >
+            <Field label="Threshold price" htmlFor="order-threshold-price">
+              <input
+                id="order-threshold-price"
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                value={form.thresholdPrice}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, thresholdPrice: e.target.value }))
+                }
+                style={inputStyle}
+              />
+            </Field>
+            <Field label="Threshold qty" htmlFor="order-threshold-quantity">
+              <input
+                id="order-threshold-quantity"
+                type="number"
+                inputMode="numeric"
+                min={1}
+                value={form.thresholdQuantity}
+                onChange={(e) =>
+                  setForm((p) => ({
+                    ...p,
+                    thresholdQuantity: parseInt(e.target.value) || 1,
+                  }))
+                }
+                style={inputStyle}
+              />
+            </Field>
+            <Field label="Price source" htmlFor="order-threshold-price-source">
+              <select
+                id="order-threshold-price-source"
+                value={form.thresholdPriceSource}
+                onChange={(e) =>
+                  setForm((p) => ({
+                    ...p,
+                    thresholdPriceSource: e.target.value as
+                      | "BID"
+                      | "ASK"
+                      | "LAST",
+                  }))
+                }
+                style={selectStyle}
+              >
+                <option value="BID">BID</option>
+                <option value="ASK">ASK</option>
+                <option value="LAST">LAST</option>
+              </select>
+            </Field>
+          </div>
+        )}
+
+        {/* Quantity ---------------------------------------------- */}
+        <Field label="Quantity" htmlFor="order-quantity">
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <input
+              id="order-quantity"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              value={form.quantity}
               onChange={(e) => {
                 const raw = e.target.value;
-                if (raw === '') {
-                  // Allow temporarily empty while typing/backspacing.
-                  setFormData({ ...formData, quantity: '' as any });
-                  return;
+                if (raw === "") setForm((p) => ({ ...p, quantity: "" as any }));
+                else {
+                  const n = parseInt(raw, 10);
+                  if (!Number.isNaN(n))
+                    setForm((p) => ({ ...p, quantity: Math.max(1, n) }));
                 }
-                const parsed = parseInt(raw, 10);
-                if (Number.isNaN(parsed)) {
-                  return;
-                }
-                setFormData({
-                  ...formData,
-                  quantity: parsed < 1 ? (1 as any) : (parsed as any),
-                });
               }}
               onBlur={() => {
-                if (!formData.quantity) {
-                  setFormData({ ...formData, quantity: 1 as any });
-                }
+                if (!form.quantity) setForm((p) => ({ ...p, quantity: 1 }));
               }}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+              style={{ ...inputStyle, flex: 1, minWidth: 0 }}
             />
-          </div>
-
-          {(formData.orderType === 'LIMIT' || formData.orderType === 'STOP_LIMIT') && (
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-medium text-slate-400">
-                  Limit price
-                </label>
-                {autoPricing && (
-                  <span className="text-xs text-slate-400">Syncing with market...</span>
-                )}
-              </div>
-              <input
-                type="number"
-                step="0.01"
-                value={formData.limitPrice}
-                onChange={(e) => setFormData({ ...formData, limitPrice: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          )}
-
-          {(formData.orderType === 'STOP' || formData.orderType === 'STOP_LIMIT') && (
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">
-                Stop price
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                value={formData.stopPrice}
-                onChange={(e) => setFormData({ ...formData, stopPrice: e.target.value })}
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          )}
-        </section>
-
-        <section className="space-y-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500 border-b border-slate-700/50 pb-2">
-            Duration & schedule
-          </h3>
-          {formData.scheduleEnabled && !formData.scheduleOnce && (
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1">
-                Placement frequency
-              </label>
-              <select
-                value={formData.scheduleFrequency}
-                onChange={(e) =>
-                  setFormData({ ...formData, scheduleFrequency: e.target.value as 'DAILY' | 'WEEKLY' })
-                }
-                className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-              >
-                <option value="DAILY">Every trading day</option>
-                <option value="WEEKLY">Once per week</option>
-              </select>
-            </div>
-          )}
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              Order term sent to E*TRADE
-            </label>
-            <select
-              value={formData.actualDuration}
-              onChange={(e) => setFormData({ ...formData, actualDuration: e.target.value })}
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-            >
-              <option value="DAY">DAY</option>
-              <option value="GTC" disabled={gtcRestricted}>
-                GTC{gtcRestricted ? ' (unavailable)' : ''}
-              </option>
-              <option value="IMMEDIATE_OR_CANCEL">Immediate or Cancel</option>
-              <option value="FILL_OR_KILL">Fill or Kill</option>
-            </select>
-          </div>
-
-          {formData.scheduleEnabled && (
-            <div className="p-3 bg-amber-500/20 border border-amber-500/50 rounded-lg text-amber-400 text-sm">
-              {formData.scheduleOnce
-                ? 'Runs once at the scheduled time.'
-                : formData.scheduleFrequency === 'WEEKLY'
-                  ? 'Repeats once per week at the scheduled time.'
-                  : 'Repeats every trading day at the scheduled time.'}
-            </div>
-          )}
-
-          <div>
-            <label className="block text-xs font-medium text-slate-400 mb-1">
-              Session time
-            </label>
-            <select
-              value={formData.sessionTime}
-              onChange={(e) =>
-                setFormData({ ...formData, sessionTime: e.target.value as FormState['sessionTime'] })
-              }
-              className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-            >
-              <option value="EXTENDED">Extended hours (7:00 AM ET)</option>
-              <option value="MARKET">Market hours (9:30 AM ET)</option>
-            </select>
-            <p className="mt-1 text-xs text-slate-500">
-              This sets the default time when no explicit schedule time is chosen.
-            </p>
-          </div>
-
-          <div>
-            <label className="flex items-center gap-2 text-slate-400 text-xs font-medium">
-              <input
-                type="checkbox"
-                checked={formData.scheduleEnabled}
-                onChange={(e) => {
-                  const enabled = e.target.checked;
-                  setFormData((prev) => ({
-                    ...prev,
-                    scheduleEnabled: enabled,
-                    scheduledFor: enabled ? prev.scheduledFor : '',
-                  }));
-                  if (!enabled) {
-                    setScheduledForTouched(false);
-                  }
+            {[10, 50, 100].map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setForm((p) => ({ ...p, quantity: n }))}
+                style={{
+                  padding: "6px 8px",
+                  borderRadius: 6,
+                  border: form.quantity === n ? "1px solid var(--info)" : "1px solid var(--bg-3)",
+                  background: form.quantity === n ? "color-mix(in oklab, var(--info) 18%, transparent)" : "var(--bg-2)",
+                  color: form.quantity === n ? "var(--info)" : "var(--text-dim)",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  flexShrink: 0,
                 }}
-                className="w-4 h-4"
-              />
-              Schedule this order
-            </label>
-          </div>
-
-          {formData.scheduleEnabled && (
-            <>
-              <div>
-                <label className="flex items-center gap-2 text-slate-400 text-xs font-medium">
-                  <input
-                    type="checkbox"
-                    checked={formData.scheduleOnce}
-                    onChange={(e) => setFormData({ ...formData, scheduleOnce: e.target.checked })}
-                    className="w-4 h-4"
-                  />
-                  Schedule only once (ignores placement frequency)
-                </label>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Schedule time
-                </label>
-                <input
-                  type="datetime-local"
-                  value={formData.scheduledFor}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setScheduledForTouched(value !== '');
-                    setFormData({ ...formData, scheduledFor: value });
+              >
+                {n}
+              </button>
+            ))}
+            {(form.action === "SELL" || form.action === "BUY_TO_COVER") &&
+              heldQty !== null &&
+              heldQty > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setForm((p) => ({ ...p, quantity: heldQty }))}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 6,
+                    border: "1px solid var(--bg-3)",
+                    background:
+                      form.quantity === heldQty ? "var(--bg-3)" : "var(--bg-2)",
+                    color: "var(--text)",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
                   }}
-                  className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                />
-                <p className="mt-1 text-xs text-slate-500">
-                  {formData.scheduledFor
-                    ? 'This is the next trading day for the selected session unless you change it.'
-                    : `Leave blank to run the next trading day at ${
-                        formData.sessionTime === 'EXTENDED' ? '7:00 AM ET' : '9:30 AM ET'
-                      }.`}
-                </p>
-              </div>
-            </>
-          )}
-        </section>
+                >
+                  {form.action === "BUY_TO_COVER" ? "Cover" : "Sell"} all (
+                  {heldQty} held)
+                </button>
+              )}
+          </div>
+        </Field>
 
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1">
-            Notes (optional)
-          </label>
-          <textarea
-            value={formData.notes}
-            onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-            rows={2}
-            className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+        {/* Schedule ---------------------------------------------- */}
+        <Field label="Schedule">
+          <Segmented
+            ariaLabel="Schedule"
+            options={[
+              { value: "ONCE", label: "Once" },
+              { value: "DAILY", label: "Daily" },
+              { value: "WEEKLY", label: "Weekly" },
+              { value: "THRESHOLD", label: "Threshold-driven" },
+            ]}
+            value={form.cadence}
+            onChange={(v) => setForm((p) => ({ ...p, cadence: v as Cadence }))}
           />
-        </div>
+        </Field>
 
-        <div className="flex flex-col gap-2 pt-2">
-          <button
-            type="submit"
-            disabled={submitting || sendingNow}
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-600 disabled:text-slate-400 text-white text-sm font-semibold rounded-lg transition-all shadow-sm shadow-blue-600/20 hover:shadow-blue-600/30"
+        {/* Cadence preview strip --------------------------------- */}
+        {(form.cadence === "DAILY" || form.cadence === "WEEKLY") &&
+          fires.length > 0 && (
+            <div>
+              <div
+                style={{
+                  color: "var(--text-dim)",
+                  fontSize: 11,
+                  letterSpacing: "0.05em",
+                  textTransform: "uppercase",
+                  marginBottom: 6,
+                }}
+              >
+                Next 5 fires
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(5, 1fr)",
+                  gap: 6,
+                }}
+              >
+                {fires.map((f, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      background:
+                        i === 0
+                          ? "color-mix(in oklab, var(--accent) 20%, transparent)"
+                          : "var(--bg-2)",
+                      border: "1px solid var(--bg-3)",
+                      borderRadius: 8,
+                      padding: "8px 6px",
+                      textAlign: "center",
+                      fontFamily:
+                        "var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)",
+                      fontSize: 11,
+                      color: i === 0 ? "var(--accent)" : "var(--text-dim)",
+                      lineHeight: 1.35,
+                    }}
+                  >
+                    {compactCadenceCell(f)} ET
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+        {form.cadence === "ONCE" && (
+          <Field label="Schedule time (optional)" htmlFor="order-scheduled-for">
+            <div style={{ position: "relative" }}>
+              <input
+                id="order-scheduled-for"
+                type="datetime-local"
+                value={form.scheduledFor}
+                onChange={(e) =>
+                  setForm((p) => ({ ...p, scheduledFor: e.target.value }))
+                }
+                min={toLocalDateTimeInputValue(new Date())}
+                style={{
+                  ...inputStyle,
+                  colorScheme: "dark",
+                }}
+              />
+              {!form.scheduledFor && (
+                <div
+                  className="mobile-only"
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    padding: "10px 12px",
+                    color: "var(--text-dim)",
+                    fontSize: 14,
+                    pointerEvents: "none",
+                  }}
+                >
+                  Tap to pick date &amp; time
+                </div>
+              )}
+            </div>
+            <div
+              style={{ marginTop: 6, color: "var(--text-dim)", fontSize: 11 }}
+            >
+              {form.scheduledFor
+                ? `Fires ${formatHumanET(new Date(form.scheduledFor))} ET`
+                : "Leave blank to send right away."}
+            </div>
+          </Field>
+        )}
+
+        {/* Only fill once ---------------------------------------- */}
+        {(form.cadence === "DAILY" || form.cadence === "WEEKLY") && (
+          <label
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              cursor: "pointer",
+              padding: "10px 12px",
+              borderRadius: 8,
+              border: "1px solid var(--bg-3)",
+              background: "var(--bg-2)",
+            }}
           >
-            {submitting ? 'Creating...' : 'Create Order'}
-          </button>
+            <input
+              id="order-only-fill-once"
+              type="checkbox"
+              checked={form.onlyFillOnce}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, onlyFillOnce: e.target.checked }))
+              }
+              style={{ marginTop: 2 }}
+            />
+            <span style={{ fontSize: 13, color: "var(--text)" }}>
+              Only fill once
+              <span
+                style={{
+                  display: "block",
+                  marginTop: 2,
+                  fontSize: 11,
+                  color: "var(--text-dim)",
+                }}
+              >
+                Cancel future scheduled clones once this order actually fills at
+                E*TRADE. Partial fills shrink the next clone to the unfilled
+                remainder.
+              </span>
+            </span>
+          </label>
+        )}
+
+        {/* Session ----------------------------------------------- */}
+        <Field label="Session" htmlFor="order-session">
+          <select
+            id="order-session"
+            value={form.session}
+            onChange={(e) =>
+              setForm((p) => ({ ...p, session: e.target.value as Session }))
+            }
+            style={selectStyle}
+          >
+            <option value="MARKET">MARKET (9:30 ET)</option>
+            <option value="EXTENDED">EXTENDED (7:00 ET)</option>
+          </select>
+        </Field>
+
+        {/* Notes ------------------------------------------------- */}
+        <Field label="Notes (optional)" htmlFor="order-notes">
+          <textarea
+            id="order-notes"
+            rows={2}
+            value={form.notes}
+            onChange={(e) => setForm((p) => ({ ...p, notes: e.target.value }))}
+            style={{ ...inputStyle, fontFamily: "inherit", resize: "vertical" }}
+          />
+        </Field>
+      </div>
+
+      {/* Sticky bottom summary -------------------------------------- */}
+      <div
+        style={{
+          position: "sticky",
+          bottom: 0,
+          marginTop: 16,
+          background: "var(--bg-2)",
+          border: "1px solid var(--bg-3)",
+          borderRadius: 12,
+          padding: "14px 18px",
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          boxShadow: "0 -8px 24px rgba(0,0,0,0.35)",
+        }}
+      >
+        <div
+          style={{
+            flex: 1,
+            color: "var(--text)",
+            fontSize: 13,
+            lineHeight: 1.45,
+          }}
+        >
+          {summary ? (
+            <HighlightAction text={summary} action={form.action} />
+          ) : (
+            <span style={{ color: "var(--text-dim)" }}>
+              Fill in symbol, action, quantity, and price to see the order
+              summary.
+            </span>
+          )}
+        </div>
+        {pmWarning ? (
+          <div
+            style={{
+              padding: "12px 16px",
+              borderRadius: 8,
+              background: "rgba(251,191,36,0.1)",
+              border: "1px solid rgba(251,191,36,0.3)",
+              fontSize: 13,
+              color: "#fbbf24",
+              marginBottom: 8,
+            }}
+          >
+            <div style={{ marginBottom: 8 }}>
+              E*TRADE rejects orders during the post-close transition
+              (4:00\u20134:05 PM ET). Your order:{" "}
+              <b style={{ color: "#fff" }}>
+                {pmWarning.action} {pmWarning.qty} {pmWarning.symbol} @{" "}
+                {pmWarning.price > 0
+                  ? "$" + pmWarning.price.toFixed(2)
+                  : "market"}
+              </b>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={placeAsExtended}
+                style={{
+                  flex: 1,
+                  padding: "8px 12px",
+                  borderRadius: 6,
+                  border: "1px solid #3b82f6",
+                  background: "rgba(59,130,246,0.15)",
+                  color: "#60a5fa",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                Place EH Order
+              </button>
+              <button
+                type="button"
+                onClick={placeForTomorrow}
+                style={{
+                  flex: 1,
+                  padding: "8px 12px",
+                  borderRadius: 6,
+                  border: "1px solid #334155",
+                  background: "rgba(30,41,59,0.5)",
+                  color: "#cbd5e1",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: "pointer",
+                }}
+              >
+                Place tomorrow
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setPmWarning(null)}
+              style={{
+                marginTop: 6,
+                background: "transparent",
+                border: 0,
+                color: "#64748b",
+                fontSize: 11,
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        ) : confirming ? (
           <button
             type="button"
-            onClick={handleSendNow}
-            disabled={sendingNow || submitting}
-            className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-600 disabled:text-slate-400 text-white text-sm font-semibold rounded-lg transition-all shadow-sm shadow-emerald-600/20 hover:shadow-emerald-600/30"
+            onClick={cancelConfirm}
+            style={{
+              padding: "10px 18px",
+              border: `1px solid var(--accent)`,
+              borderRadius: 10,
+              background: "color-mix(in oklab, var(--accent) 22%, transparent)",
+              color: "var(--accent)",
+              fontWeight: 700,
+              cursor: "pointer",
+              fontSize: 13,
+            }}
           >
-            {sendingNow ? 'Sending...' : 'Send Now'}
+            Confirm? ↵ / ESC ({confirmCountdown}s)
           </button>
-        </div>
-      </form>
+        ) : (
+          <button
+            type="button"
+            onClick={startConfirm}
+            disabled={!valid || placing}
+            style={{
+              padding: "10px 18px",
+              borderRadius: 10,
+              border: 0,
+              fontWeight: 700,
+              fontSize: 13,
+              cursor: !valid || placing ? "not-allowed" : "pointer",
+              background:
+                !valid || placing
+                  ? "var(--bg-3)"
+                  : form.action === "BUY" || form.action === "BUY_TO_COVER"
+                    ? "color-mix(in oklab, var(--ok) 75%, black)"
+                    : "color-mix(in oklab, var(--bad) 75%, black)",
+              color: !valid || placing ? "var(--text-dim)" : "var(--text)",
+            }}
+          >
+            {placing ? "Placing…" : "Place order →"}
+          </button>
+        )}
+      </div>
     </div>
+  );
+}
+
+/* ---------------- helpers ---------------- */
+
+function buildSummary(
+  form: FormState,
+  quote: { bid: number; ask: number; last: number } | null,
+  firstFire: Date | null,
+): string {
+  const sym = form.symbol.trim().toUpperCase() || "—";
+  const qty = form.quantity || 0;
+  const action = form.action.replace(/_/g, " ");
+  const orderType = form.orderType;
+
+  const px =
+    form.orderType === "LIMIT" || form.orderType === "STOP_LIMIT"
+      ? form.limitPrice
+      : form.orderType === "STOP"
+        ? form.stopPrice
+        : form.orderType === "THRESHOLD"
+          ? form.thresholdPrice
+          : "";
+  const priceLabel = px ? ` at ${orderType} $${px}` : ` at ${orderType}`;
+
+  const cadenceLabel =
+    form.cadence === "ONCE"
+      ? "once"
+      : form.cadence === "DAILY"
+        ? "daily"
+        : form.cadence === "WEEKLY"
+          ? "weekly"
+          : "threshold-driven";
+
+  const sessionLabel = `${form.session === "MARKET" ? "9:30" : "7:00"} ET ${form.session}`;
+
+  // Estimate notional from limit price when present, otherwise from quote.
+  let estPx: number | null = null;
+  if (px && !Number.isNaN(parseFloat(px))) estPx = parseFloat(px);
+  else if (quote) {
+    estPx =
+      form.action === "BUY" || form.action === "BUY_TO_COVER"
+        ? quote.ask
+        : quote.bid;
+    if (!estPx) estPx = quote.last;
+  }
+  const estCost =
+    estPx && qty
+      ? `$${(qty * estPx).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+      : null;
+
+  let firstFireLabel = "";
+  if (form.cadence === "DAILY" || form.cadence === "WEEKLY") {
+    firstFireLabel = firstFire
+      ? ` · first fire ${formatHumanET(firstFire)} ET`
+      : "";
+  } else if (form.cadence === "ONCE" && form.scheduledFor) {
+    const d = new Date(form.scheduledFor);
+    if (!Number.isNaN(d.getTime()))
+      firstFireLabel = ` · fires ${formatHumanET(d)} ET`;
+  }
+
+  return `You are about to schedule ${action} ${qty} ${sym}${priceLabel} ${cadenceLabel} · ${sessionLabel}${
+    estCost ? ` · est max cost ${estCost}` : ""
+  }${firstFireLabel}.`;
+}
+
+/* ---------------- styled bits ---------------- */
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "10px 12px",
+  background: "var(--bg-2)",
+  border: "1px solid var(--bg-3)",
+  borderRadius: 8,
+  color: "var(--text)",
+  fontSize: 14,
+  outline: "none",
+};
+
+const selectStyle: React.CSSProperties = { ...inputStyle, appearance: "none" };
+
+function Field({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <label
+        htmlFor={htmlFor}
+        style={{
+          display: "block",
+          color: "var(--text-dim)",
+          fontSize: 11,
+          letterSpacing: "0.05em",
+          textTransform: "uppercase",
+          marginBottom: 6,
+        }}
+      >
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function Banner({
+  kind,
+  children,
+}: {
+  kind: "error" | "ok";
+  children: React.ReactNode;
+}) {
+  const fg = kind === "error" ? "var(--bad)" : "var(--ok)";
+  return (
+    <div
+      style={{
+        marginBottom: 12,
+        padding: "8px 12px",
+        borderRadius: 8,
+        border: `1px solid ${fg}`,
+        background: `color-mix(in oklab, ${fg} 12%, transparent)`,
+        color: fg,
+        fontSize: 12,
+        whiteSpace: "pre-wrap",
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function Sep() {
+  return <span style={{ margin: "0 8px", color: "var(--bg-3)" }}>·</span>;
+}
+
+function NumColored({ children }: { children: React.ReactNode }) {
+  return <span style={{ color: "var(--text)" }}>{children}</span>;
+}
+
+interface SegmentedProps<T extends string> {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+  colorize?: (v: T) => string;
+  ariaLabel?: string;
+}
+
+function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  colorize,
+  ariaLabel,
+}: SegmentedProps<T>) {
+  return (
+    <div
+      role="group"
+      aria-label={ariaLabel}
+      style={{
+        display: "grid",
+        gridTemplateColumns: `repeat(${options.length}, 1fr)`,
+        gap: 0,
+        background: "var(--bg-2)",
+        border: "1px solid var(--bg-3)",
+        borderRadius: 8,
+        padding: 3,
+      }}
+    >
+      {options.map((opt) => {
+        const active = opt.value === value;
+        const c = colorize ? colorize(opt.value) : "var(--info)";
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(opt.value)}
+            style={{
+              padding: "8px 10px",
+              fontSize: 12,
+              fontWeight: active ? 700 : 500,
+              border: 0,
+              borderRadius: 6,
+              cursor: "pointer",
+              transition: "background 0.15s",
+              background: active
+                ? `color-mix(in oklab, ${c} 22%, transparent)`
+                : "transparent",
+              color: active ? c : "var(--text-dim)",
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function HighlightAction({ text, action }: { text: string; action: string }) {
+  const label = action.replace(/_/g, " ");
+  const idx = text.indexOf(label);
+  if (idx < 0) return <>{text}</>;
+  const isBuy = action === "BUY" || action === "BUY_TO_COVER";
+  return (
+    <>
+      {text.slice(0, idx)}
+      <span style={{
+        color: "#fff",
+        background: isBuy ? "var(--ok)" : "var(--bad)",
+        padding: "1px 6px",
+        borderRadius: 3,
+        fontWeight: 600,
+      }}>
+        {label}
+      </span>
+      {text.slice(idx + label.length)}
+    </>
   );
 }

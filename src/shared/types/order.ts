@@ -1,15 +1,39 @@
-export type OrderDuration = 'DAY' | 'GTC' | 'FILL_OR_KILL' | 'IMMEDIATE_OR_CANCEL';
-export type OrderType = 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT' | 'THRESHOLD';
-export type ThresholdPriceSource = 'BID' | 'ASK' | 'LAST';
-export type OrderAction = 'BUY' | 'SELL' | 'BUY_TO_COVER' | 'SELL_SHORT';
-export type OrderStatus = 'PENDING' | 'SCHEDULED' | 'SUBMITTED' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELLED' | 'REJECTED' | 'EXPIRED' | 'PAUSED' | 'DELETED';
-export type SecurityType = 'EQUITY' | 'OPTION' | 'MUTUAL_FUND' | 'MONEY_MARKET_FUND';
-export type OptionType = 'CALL' | 'PUT';
-export type SessionTime = 'MARKET' | 'EXTENDED';
-export type ScheduleFrequency = 'DAILY' | 'WEEKLY';
+export type OrderDuration =
+  | "DAY"
+  | "GTC"
+  | "FILL_OR_KILL"
+  | "IMMEDIATE_OR_CANCEL";
+export type OrderType =
+  | "MARKET"
+  | "LIMIT"
+  | "STOP"
+  | "STOP_LIMIT"
+  | "THRESHOLD";
+export type ThresholdPriceSource = "BID" | "ASK" | "LAST";
+export type OrderAction = "BUY" | "SELL" | "BUY_TO_COVER" | "SELL_SHORT";
+export type OrderStatus =
+  | "PENDING"
+  | "SCHEDULED"
+  | "SUBMITTED"
+  | "FILLED"
+  | "PARTIALLY_FILLED"
+  | "CANCELLED"
+  | "REJECTED"
+  | "EXPIRED"
+  | "PAUSED"
+  | "DELETED";
+export type SecurityType =
+  | "EQUITY"
+  | "OPTION"
+  | "MUTUAL_FUND"
+  | "MONEY_MARKET_FUND";
+export type OptionType = "CALL" | "PUT";
+export type SessionTime = "MARKET" | "EXTENDED";
+export type ScheduleFrequency = "DAILY" | "WEEKLY";
 
 export interface Order {
   id: string;
+  parentId: string;
   accountId: string;
   symbol: string;
   securityType: SecurityType;
@@ -29,9 +53,9 @@ export interface Order {
 
   // Duration and scheduling
   preferredDuration: OrderDuration; // What user wants (e.g., GTC)
-  actualDuration: OrderDuration;     // What gets placed (e.g., DAY)
-  requiresDaily: boolean;            // Back-compat: derived from scheduleFrequency
-  sessionTime: SessionTime;          // MARKET (9:30) or EXTENDED (7:00)
+  actualDuration: OrderDuration; // What gets placed (e.g., DAY)
+  requiresDaily: boolean; // Back-compat: derived from scheduleFrequency
+  sessionTime: SessionTime; // MARKET (9:30) or EXTENDED (7:00)
 
   // Scheduling
   scheduledFor?: Date;
@@ -39,6 +63,13 @@ export interface Order {
   scheduleFrequency: ScheduleFrequency;
   /** When true, order runs once at scheduledFor and is never rescheduled (e.g. "run at 2:45 today only"). */
   scheduleOnce?: boolean;
+  /**
+   * When true (default), and the placement actually fills at E*TRADE, future
+   * scheduled clones in the same lineage are cancelled. Partial fills cause
+   * the next clone's quantity to drop to (ordered - filled). Set false for
+   * pure recurring DCA-style orders that should fire fresh every session.
+   */
+  onlyFillOnce: boolean;
 
   // Status tracking
   status: OrderStatus;
@@ -47,6 +78,8 @@ export interface Order {
   filledAt?: Date;
   cancelledAt?: Date;
   expiresAt?: Date;
+  /** Shares actually executed at E*TRADE; populated by verifyOrderStatus. */
+  filledQuantity?: number;
 
   // Error tracking
   lastError?: string;
@@ -70,6 +103,14 @@ export interface Order {
   createdAt: Date;
   updatedAt: Date;
   notes?: string;
+
+  // Lineage rollup (populated by getActiveOrdersWithLineage; absent on standard fetches)
+  /** Symbol of the parent recurring template, when this row is a clone. */
+  parentSymbol?: string | null;
+  /** Number of children that share this row's id as their parent_id. */
+  lineageCount?: number;
+  /** Most recent FILLED filled_at across the lineage; null when none filled. */
+  lastFillAt?: Date | null;
 }
 
 export interface ScheduledOrder {

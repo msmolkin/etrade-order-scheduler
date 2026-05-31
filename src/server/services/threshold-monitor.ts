@@ -1,9 +1,9 @@
-import { ETradeClient } from './etrade-client.js';
-import { OrderService } from './order-service.js';
-import { OrderExecutor } from './order-executor.js';
-import type { Order, ThresholdPriceSource } from '../../shared/types/index.js';
-import { promises as fs } from 'fs';
-import path from 'path';
+import { ETradeClient } from "./etrade-client.js";
+import { OrderService } from "./order-service.js";
+import { OrderExecutor } from "./order-executor.js";
+import type { Order, ThresholdPriceSource } from "../../shared/types/index.js";
+import { promises as fs } from "fs";
+import path from "path";
 
 /** E*TRADE raw quote market data (nested under quote.All in API response) */
 interface ETradeQuoteAll {
@@ -34,7 +34,7 @@ export class ThresholdMonitor {
   constructor(
     etradeClient: ETradeClient,
     orderService: OrderService,
-    orderExecutor: OrderExecutor
+    orderExecutor: OrderExecutor,
   ) {
     this.etradeClient = etradeClient;
     this.orderService = orderService;
@@ -43,22 +43,24 @@ export class ThresholdMonitor {
 
   async start(): Promise<void> {
     if (this.isRunning) {
-      console.log('[ThresholdMonitor] Already running');
+      console.log("[ThresholdMonitor] Already running");
       return;
     }
 
     this.isRunning = true;
-    console.log('[ThresholdMonitor] Starting threshold monitor...');
+    console.log("[ThresholdMonitor] Starting threshold monitor...");
 
     // Load active threshold orders from database
     const activeOrders = await this.orderService.getActiveThresholdOrders();
-    console.log(`[ThresholdMonitor] Found ${activeOrders.length} active threshold orders`);
+    console.log(
+      `[ThresholdMonitor] Found ${activeOrders.length} active threshold orders`,
+    );
 
     for (const order of activeOrders) {
       await this.startMonitoring(order);
     }
 
-    console.log('[ThresholdMonitor] Started successfully');
+    console.log("[ThresholdMonitor] Started successfully");
   }
 
   async stop(): Promise<void> {
@@ -67,7 +69,7 @@ export class ThresholdMonitor {
     }
 
     this.isRunning = false;
-    console.log('[ThresholdMonitor] Stopping threshold monitor...');
+    console.log("[ThresholdMonitor] Stopping threshold monitor...");
 
     // Stop all active monitors
     const monitors = Array.from(this.activeMonitors.values());
@@ -75,7 +77,7 @@ export class ThresholdMonitor {
       await this.stopMonitoring(monitor.order.id);
     }
 
-    console.log('[ThresholdMonitor] Stopped');
+    console.log("[ThresholdMonitor] Stopped");
   }
 
   async startMonitoring(order: Order): Promise<void> {
@@ -84,7 +86,9 @@ export class ThresholdMonitor {
     }
 
     if (this.activeMonitors.has(order.id)) {
-      console.log(`[ThresholdMonitor] Order ${order.id} is already being monitored`);
+      console.log(
+        `[ThresholdMonitor] Order ${order.id} is already being monitored`,
+      );
       return;
     }
 
@@ -95,7 +99,7 @@ export class ThresholdMonitor {
       !order.thresholdPriceSource
     ) {
       console.error(
-        `[ThresholdMonitor] Order ${order.id} missing required threshold fields, skipping`
+        `[ThresholdMonitor] Order ${order.id} missing required threshold fields, skipping`,
       );
       return;
     }
@@ -109,19 +113,19 @@ export class ThresholdMonitor {
         await fs.mkdir(logDir, { recursive: true });
 
         // Open file for appending
-        logFileHandle = await fs.open(order.thresholdLogFile, 'a');
+        logFileHandle = await fs.open(order.thresholdLogFile, "a");
 
         // Write header if file is new/empty
         const stats = await fs.stat(order.thresholdLogFile);
         if (stats.size === 0) {
           await logFileHandle.writeFile(
-            'timestamp,symbol,bid,ask,last,bidSize,askSize,lastSize\n'
+            "timestamp,symbol,bid,ask,last,bidSize,askSize,lastSize\n",
           );
         }
       } catch (error: any) {
         console.error(
           `[ThresholdMonitor] Failed to open log file ${order.thresholdLogFile}:`,
-          error.message
+          error.message,
         );
       }
     }
@@ -140,7 +144,7 @@ export class ThresholdMonitor {
     setImmediate(() => this.pollOrder(order.id));
 
     console.log(
-      `[ThresholdMonitor] Started monitoring order ${order.id} (${order.symbol}) - polling every ${pollInterval}ms`
+      `[ThresholdMonitor] Started monitoring order ${order.id} (${order.symbol}) - polling every ${pollInterval}ms`,
     );
   }
 
@@ -161,11 +165,12 @@ export class ThresholdMonitor {
 
   async activateSellOrderMonitoring(buyOrderId: string): Promise<void> {
     // Find sell orders that are triggered by this buy order
-    const sellOrders = await this.orderService.getSellOrdersForBuyOrder(buyOrderId);
+    const sellOrders =
+      await this.orderService.getSellOrdersForBuyOrder(buyOrderId);
 
     for (const sellOrder of sellOrders) {
       console.log(
-        `[ThresholdMonitor] Activating sell order monitoring for order ${sellOrder.id} (triggered by ${buyOrderId})`
+        `[ThresholdMonitor] Activating sell order monitoring for order ${sellOrder.id} (triggered by ${buyOrderId})`,
       );
       await this.startMonitoring(sellOrder);
     }
@@ -214,19 +219,28 @@ export class ThresholdMonitor {
       const lastSize = quoteData.lastSize ?? null;
 
       // Log quote to file
-      await this.logQuote(monitor, order.symbol, bid, ask, last, bidSize, askSize, lastSize);
+      await this.logQuote(
+        monitor,
+        order.symbol,
+        bid,
+        ask,
+        last,
+        bidSize,
+        askSize,
+        lastSize,
+      );
 
       // Check threshold condition
       const thresholdMet = this.checkThresholdCondition(
         price,
         order.thresholdPrice!,
         order.action,
-        order.thresholdPriceSource!
+        order.thresholdPriceSource!,
       );
 
       if (thresholdMet) {
         console.log(
-          `[ThresholdMonitor] Threshold met for order ${order.id}: ${order.symbol} ${order.thresholdPriceSource} = ${price.toFixed(2)} (threshold: ${order.thresholdPrice})`
+          `[ThresholdMonitor] Threshold met for order ${order.id}: ${order.symbol} ${order.thresholdPriceSource} = ${price.toFixed(2)} (threshold: ${order.thresholdPrice})`,
         );
 
         // Stop monitoring this order
@@ -238,27 +252,39 @@ export class ThresholdMonitor {
 
         if (success) {
           // If this is a buy order and sell order is enabled, activate sell order monitoring
-          if (order.action === 'BUY' && order.sellOrderEnabled) {
+          if (order.action === "BUY" && order.sellOrderEnabled) {
             await this.activateSellOrderMonitoring(order.id);
           }
         } else {
           // Restart monitoring if execution failed
-          console.log(`[ThresholdMonitor] Order execution failed, restarting monitoring for ${order.id}`);
+          console.log(
+            `[ThresholdMonitor] Order execution failed, restarting monitoring for ${order.id}`,
+          );
           await this.startMonitoring(order);
         }
       }
     } catch (error: any) {
-      console.error(`[ThresholdMonitor] Error polling order ${order.id}:`, error.message);
+      console.error(
+        `[ThresholdMonitor] Error polling order ${order.id}:`,
+        error.message,
+      );
     }
   }
 
-  private extractPrice(quoteData: ETradeQuoteAll, source: ThresholdPriceSource): number | null {
+  private extractPrice(
+    quoteData: ETradeQuoteAll,
+    source: ThresholdPriceSource,
+  ): number | null {
     switch (source) {
-      case 'BID':
-        return quoteData.bid != null && Number.isFinite(quoteData.bid) ? quoteData.bid : null;
-      case 'ASK':
-        return quoteData.ask != null && Number.isFinite(quoteData.ask) ? quoteData.ask : null;
-      case 'LAST':
+      case "BID":
+        return quoteData.bid != null && Number.isFinite(quoteData.bid)
+          ? quoteData.bid
+          : null;
+      case "ASK":
+        return quoteData.ask != null && Number.isFinite(quoteData.ask)
+          ? quoteData.ask
+          : null;
+      case "LAST":
         const last = quoteData.lastTrade ?? quoteData.previousClose;
         return last != null && Number.isFinite(last) ? last : null;
       default:
@@ -270,7 +296,7 @@ export class ThresholdMonitor {
     currentPrice: number,
     thresholdPrice: number,
     action: string,
-    priceSource: ThresholdPriceSource
+    priceSource: ThresholdPriceSource,
   ): boolean {
     // For BUY orders:
     // - LAST: buy when price drops below threshold (buy low)
@@ -280,11 +306,11 @@ export class ThresholdMonitor {
     // - LAST: sell when price rises above threshold (sell high)
     // - BID: sell when bid rises above threshold (favorable bid for selling)
     // - ASK: sell when ask rises above threshold (favorable ask for selling)
-    
-    if (action === 'BUY') {
-      if (priceSource === 'LAST') {
+
+    if (action === "BUY") {
+      if (priceSource === "LAST") {
         return currentPrice < thresholdPrice;
-      } else if (priceSource === 'BID') {
+      } else if (priceSource === "BID") {
         // Buy when bid > threshold (bid is favorable)
         return currentPrice > thresholdPrice;
       } else {
@@ -293,9 +319,9 @@ export class ThresholdMonitor {
       }
     } else {
       // SELL
-      if (priceSource === 'LAST') {
+      if (priceSource === "LAST") {
         return currentPrice > thresholdPrice;
-      } else if (priceSource === 'BID') {
+      } else if (priceSource === "BID") {
         // Sell when bid > threshold (bid is favorable for selling)
         return currentPrice > thresholdPrice;
       } else {
@@ -313,7 +339,7 @@ export class ThresholdMonitor {
     last: number | null,
     bidSize: number | null,
     askSize: number | null,
-    lastSize: number | null
+    lastSize: number | null,
   ): Promise<void> {
     if (!monitor.logFileHandle) {
       return;
@@ -321,10 +347,13 @@ export class ThresholdMonitor {
 
     try {
       const timestamp = new Date().toISOString();
-      const line = `${timestamp},${symbol},${bid ?? ''},${ask ?? ''},${last ?? ''},${bidSize ?? ''},${askSize ?? ''},${lastSize ?? ''}\n`;
-      await monitor.logFileHandle.writeFile(line, { flag: 'a' });
+      const line = `${timestamp},${symbol},${bid ?? ""},${ask ?? ""},${last ?? ""},${bidSize ?? ""},${askSize ?? ""},${lastSize ?? ""}\n`;
+      await monitor.logFileHandle.appendFile(line);
     } catch (error: any) {
-      console.error(`[ThresholdMonitor] Failed to write quote log:`, error.message);
+      console.error(
+        `[ThresholdMonitor] Failed to write quote log:`,
+        error.message,
+      );
     }
   }
 

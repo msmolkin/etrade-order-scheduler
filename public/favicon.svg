@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Navy rounded-square background -->
+  <rect x="0" y="0" width="32" height="32" rx="6" ry="6" fill="#0d1117"/>
+  <!-- Amber upward chevron: left leg and right leg meeting at apex -->
+  <!-- Baseline bar (subtle, grounds the mark) -->
+  <line x1="8" y1="22" x2="24" y2="22" stroke="#c9a030" stroke-width="2.5" stroke-linecap="round" opacity="0.45"/>
+  <!-- Chevron: from lower-left up to apex, then down to lower-right -->
+  <polyline
+    points="7,21 16,10 25,21"
+    fill="none"
+    stroke="#c9a030"
+    stroke-width="3"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+</svg>

@@ -1,4 +1,4 @@
-import type { SecurityType, OptionType } from './order.js';
+import type { SecurityType, OptionType } from "./order.js";
 
 /**
  * Normalized representation of a portfolio position, shared between
@@ -56,3 +56,29 @@ export interface PositionCushion {
   underlyingQuote: UnderlyingQuoteSummary | null;
 }
 
+/**
+ * Position enriched with market value data and nominal exposure,
+ * used by the Portfolio tab.
+ */
+export interface PortfolioPosition extends Position {
+  /** Dollar value of this position in the portfolio (option premium × 100, or shares × price). */
+  marketValue?: number;
+  /** Percent of total portfolio market value, as reported by E*TRADE. */
+  pctOfPortfolio?: number;
+  /** Spot price of the underlying symbol (stock price for equities, underlying for options). */
+  underlyingPrice?: number;
+  /**
+   * Signed nominal/intrinsic value:
+   *   equity  → signed_qty × underlying_price
+   *   call    → signed_contracts × 100 × max(underlying_price - strike, 0)
+   *   put     → signed_contracts × 100 × max(strike - underlying_price, 0)
+   */
+  nominalValue?: number;
+}
+
+export interface PortfolioResponse {
+  accountIdKey: string;
+  positions: PortfolioPosition[];
+  /** Total portfolio market value (from E*TRADE totals or sum of positions). */
+  totalMarketValue: number;
+}

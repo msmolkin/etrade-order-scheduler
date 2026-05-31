@@ -3,14 +3,17 @@ import cors from 'cors';
 import { WebSocketServer } from 'ws';
 import http from 'http';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { setBroadcast } from './ws-broadcast.js';
 import ordersRouter from './routes/orders.js';
 import accountsRouter from './routes/accounts.js';
 import positionsRouter from './routes/positions.js';
 import positionsCushionsRouter from './routes/positions-cushions.js';
+import portfolioRouter from './routes/portfolio.js';
 import authRouter from './routes/auth.js';
 import symbolsRouter from './routes/symbols.js';
-import { healthCheck, runSchema } from './database/client.js';
+import { healthCheck, runSchema, query } from './database/client.js';
 import { ETradeClient } from './services/etrade-client.js';
 import { OrderService } from './services/order-service.js';
 import { OrderExecutor } from './services/order-executor.js';
@@ -35,17 +38,17 @@ function getETradeClient(): ETradeClient {
   const isSandbox = process.env.ETRADE_SANDBOX === 'true';
   const credentials: ETradeCredentials = isSandbox
     ? {
-        consumerKey: process.env.ETRADE_SANDBOX_KEY!,
-        consumerSecret: process.env.ETRADE_SANDBOX_SECRET!,
-        accessToken: process.env.ETRADE_SANDBOX_ACCESS_TOKEN,
-        accessTokenSecret: process.env.ETRADE_SANDBOX_ACCESS_TOKEN_SECRET,
-      }
+      consumerKey: process.env.ETRADE_SANDBOX_KEY!,
+      consumerSecret: process.env.ETRADE_SANDBOX_SECRET!,
+      accessToken: process.env.ETRADE_SANDBOX_ACCESS_TOKEN,
+      accessTokenSecret: process.env.ETRADE_SANDBOX_ACCESS_TOKEN_SECRET,
+    }
     : {
-        consumerKey: process.env.ETRADE_CONSUMER_KEY!,
-        consumerSecret: process.env.ETRADE_CONSUMER_SECRET!,
-        accessToken: process.env.ETRADE_ACCESS_TOKEN,
-        accessTokenSecret: process.env.ETRADE_ACCESS_TOKEN_SECRET,
-      };
+      consumerKey: process.env.ETRADE_CONSUMER_KEY!,
+      consumerSecret: process.env.ETRADE_CONSUMER_SECRET!,
+      accessToken: process.env.ETRADE_ACCESS_TOKEN,
+      accessTokenSecret: process.env.ETRADE_ACCESS_TOKEN_SECRET,
+    };
 
   return new ETradeClient(credentials, isSandbox);
 }
@@ -86,18 +89,67 @@ setGetThresholdMonitor(getThresholdMonitor);
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Health check endpoint
+// Health check endpoint (Slice 6.2 surfaces scheduler heartbeat alongside DB).
 app.get('/health', async (req, res) => {
   const dbHealthy = await healthCheck();
+  let lastHeartbeatAt: string | null = null;
+  let lastHeartbeatAgeMs: number | null = null;
+  if (dbHealthy) {
+    try {
+      const result = await query<{ last_seen_at: Date }>(
+        "SELECT last_seen_at FROM scheduler_heartbeat WHERE id = 'local'",
+      );
+      const row = result.rows[0];
+      if (row && row.last_seen_at) {
+        const ts = new Date(row.last_seen_at).getTime();
+        lastHeartbeatAt = new Date(ts).toISOString();
+        lastHeartbeatAgeMs = Date.now() - ts;
+      }
+    } catch {
+      // Ignore — surface as null rather than 500ing the health probe.
+    }
+  }
   res.json({
     status: dbHealthy ? 'healthy' : 'unhealthy',
     database: dbHealthy,
+    lastHeartbeatAt,
+    lastHeartbeatAgeMs,
     timestamp: new Date().toISOString(),
   });
 });
 
 // Routes
+// Health check (Slice 6.2 alias under /api so Vite's dev proxy reaches it).
+app.get('/api/health', async (req, res) => {
+  const dbHealthy = await healthCheck();
+  let lastHeartbeatAt: string | null = null;
+  let lastHeartbeatAgeMs: number | null = null;
+  if (dbHealthy) {
+    try {
+      const result = await query<{ last_seen_at: Date }>(
+        "SELECT last_seen_at FROM scheduler_heartbeat WHERE id = 'local'",
+      );
+      const row = result.rows[0];
+      if (row && row.last_seen_at) {
+        const ts = new Date(row.last_seen_at).getTime();
+        lastHeartbeatAt = new Date(ts).toISOString();
+        lastHeartbeatAgeMs = Date.now() - ts;
+      }
+    } catch {
+      // Ignore — surface as null rather than 500ing the health probe.
+    }
+  }
+  res.json({
+    status: dbHealthy ? 'healthy' : 'unhealthy',
+    database: dbHealthy,
+    lastHeartbeatAt,
+    lastHeartbeatAgeMs,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 app.use('/api/orders', ordersRouter);
 
 // Verify E*TRADE session (able to execute) — registered before auth router so it's always available
@@ -131,7 +183,22 @@ app.use('/api/auth', authRouter);
 app.use('/api/accounts', accountsRouter);
 app.use('/api/positions', positionsRouter);
 app.use('/api/positions/cushions', positionsCushionsRouter);
+app.use('/api/portfolio', portfolioRouter);
 app.use('/api/symbols', symbolsRouter);
+
+// Serve frontend in production
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const clientPath = path.join(__dirname, '../../dist/client');
+app.use(express.static(clientPath));
+
+// Fallback all non-API requests to the React index.html
+app.use((req, res) => {
+  if (req.path.startsWith('/api/') || req.path.startsWith('/ws')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  res.sendFile(path.join(clientPath, 'index.html'));
+});
 
 // Create HTTP server
 const server = http.createServer(app);
@@ -142,7 +209,23 @@ const wss = new WebSocketServer({ server, path: '/ws' });
 wss.on('connection', (ws) => {
   console.log('✓ WebSocket client connected');
 
+  // Slice 3.2: clients heartbeat every 15s with {type:'ping'} and expect a
+  // {type:'pong'} within 20s. Anything else gets logged as before.
   ws.on('message', (message) => {
+    let parsed: { type?: unknown } | null = null;
+    try {
+      parsed = JSON.parse(message.toString()) as { type?: unknown };
+    } catch {
+      parsed = null;
+    }
+    if (parsed && parsed.type === 'ping') {
+      try {
+        ws.send(JSON.stringify({ type: 'pong', timestamp: new Date().toISOString() }));
+      } catch (err) {
+        console.warn('[ws] pong send failed', err);
+      }
+      return;
+    }
     console.log('Received:', message.toString());
   });
 
@@ -154,23 +237,28 @@ wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() }));
 });
 
-setBroadcast((order) => {
-  const message = JSON.stringify({
-    type: 'order_update',
-    order,
-    timestamp: new Date().toISOString(),
-  });
+setBroadcast((payload) => {
+  // Helpers that pass a pre-typed payload (e.g. broadcastAuthStatus, which
+  // emits { type: 'auth_status', ... }) are forwarded as-is. Untyped payloads
+  // are treated as the legacy order-update shape so existing callers keep
+  // working.
+  const isTyped =
+    typeof payload === 'object' && payload !== null && typeof (payload as { type?: unknown }).type === 'string';
+  const envelope = isTyped
+    ? { ...(payload as Record<string, unknown>), timestamp: new Date().toISOString() }
+    : { type: 'order_update', order: payload, timestamp: new Date().toISOString() };
+  const message = JSON.stringify(envelope);
   wss.clients.forEach((client) => {
     if (client.readyState === 1) client.send(message);
   });
 });
 
 // Start server
-server.listen(port, async () => {
+server.listen(Number(port), '0.0.0.0', async () => {
   console.log('\n🚀 E*TRADE Trade Placer Server');
   console.log('================================');
   console.log(`HTTP Server: http://localhost:${port}`);
-  console.log(`WebSocket: ws://localhost:${port}/ws`);
+  console.log(`WebSocket:   ws://localhost:${port}/ws`);
   console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
   const isSandbox = process.env.ETRADE_SANDBOX === 'true';
   console.log(
@@ -189,7 +277,7 @@ server.listen(port, async () => {
       try {
         const u = new URL(url.replace(/^postgresql:\/\//, 'http://'));
         hostPort = `${u.hostname}:${u.port || '5432'}`;
-      } catch (_) {}
+      } catch (_) { }
     }
     console.log('  Database: schema not applied —', schemaResult.error);
     console.log('  → DATABASE_URL points to', hostPort + '. Is PostgreSQL running there?');
@@ -211,6 +299,8 @@ server.listen(port, async () => {
   console.log('  POST   /api/auth/verify');
   console.log('  POST   /api/auth/reload-env  (reload .env so new E*TRADE tokens used without restart)');
   console.log('  POST   /api/auth/auto');
+  console.log('  POST   /api/auth/auto/submit-code');
+  console.log('  POST   /api/auth/auto/webhook');
   console.log('  GET    /api/accounts');
   console.log('  GET    /api/positions');
   console.log('  GET    /api/positions/cushions');

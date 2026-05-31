@@ -48,7 +48,7 @@ nano .env  # or use your preferred editor
 ```bash
 # Database — use your macOS username as the DB user (initdb creates this superuser; trust auth = no password for local)
 DATABASE_URL=postgresql://YOUR_MACOS_USERNAME@localhost:5432/etrade_trader
-# Example: postgresql://michael@localhost:5432/etrade_trader
+# Example: postgresql://YOUR_USER@localhost:5432/etrade_trader
 
 # E*TRADE API (Get from https://developer.etrade.com)
 ETRADE_CONSUMER_KEY=your_consumer_key_here

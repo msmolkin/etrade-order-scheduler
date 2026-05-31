@@ -41,16 +41,75 @@ export interface ETradeOrderRequest {
   productId?: { symbol: string; typeCode: string };
 }
 
+/**
+ * E*TRADE order detail status (per `OrdersResponse.Order[].OrderDetail[].status`).
+ * Observed in `etrade-documentation/api-test-results/test-results-list-and-place-order-*.json`.
+ *  - OPEN:      placed, not yet executed (we treat as SUBMITTED internally)
+ *  - EXECUTED:  fully filled                              (→ FILLED)
+ *  - PARTIAL:   partially filled                          (→ PARTIALLY_FILLED)
+ *  - CANCELLED: cancelled before fill                     (→ CANCELLED)
+ *  - EXPIRED:   DAY order ended without filling           (→ EXPIRED)
+ *  - REJECTED:  broker rejected                           (→ REJECTED)
+ */
+export type ETradeOrderDetailStatus =
+  | 'OPEN'
+  | 'EXECUTED'
+  | 'PARTIAL'
+  | 'CANCELLED'
+  | 'EXPIRED'
+  | 'REJECTED';
+
+export interface ETradeInstrumentDetail {
+  symbolDescription?: string;
+  orderAction?: string;
+  quantityType?: string;
+  orderedQuantity?: number;
+  filledQuantity?: number;
+  averageExecutionPrice?: number;
+  estimatedCommission?: number;
+  estimatedFees?: number;
+  Product?: {
+    symbol?: string;
+    securityType?: string;
+    callPut?: string;
+    expiryYear?: number;
+    expiryMonth?: number;
+    expiryDay?: number;
+    strikePrice?: number;
+    productId?: { symbol?: string; typeCode?: string };
+  };
+}
+
+export interface ETradeOrderDetail {
+  placedTime?: number;
+  executedTime?: number;
+  orderValue?: number;
+  status?: ETradeOrderDetailStatus | string;
+  orderTerm?: string;
+  priceType?: string;
+  limitPrice?: number;
+  stopPrice?: number;
+  marketSession?: string;
+  allOrNone?: boolean;
+  Instrument?: ETradeInstrumentDetail[];
+}
+
 export interface ETradeOrderResponse {
   orderId: number;
   orderType: string;
-  orderTerm: string;
-  priceType: string;
+  orderTerm?: string;
+  priceType?: string;
   limitPrice?: number;
   stopPrice?: number;
-  orderValue: number;
-  status: string;
-  orderDate: number;
+  orderValue?: number;
+  /** Top-level status — may be missing on some endpoints; prefer OrderDetail[0].status. */
+  status?: string;
+  orderDate?: number;
+  /**
+   * Per-order detail. Present on `getOrderStatus` (GET /v1/accounts/.../orders/{id}).
+   * Status + Instrument fills live here, not at the top level.
+   */
+  OrderDetail?: ETradeOrderDetail[];
   messages?: {
     description: string;
     code: number;

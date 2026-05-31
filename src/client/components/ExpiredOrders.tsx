@@ -1,12 +1,15 @@
-import React, { useEffect, useState } from 'react';
-import { fetchExpiredOrders, resendOrder, type Order } from '../utils/api';
+import React, { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { resendOrder, type Order } from '../utils/api';
+import { useExpiredOrders, expiredOrdersQueryKey } from '../hooks/useExpiredOrders';
+import { ordersQueryKey } from '../hooks/useOrders';
 
 type Toast = { id: number; message: string; type: 'success' | 'error' };
 let toastId = 0;
 
 export default function ExpiredOrders() {
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
+  const qc = useQueryClient();
+  const { data: orders = [], isLoading: loading, refetch } = useExpiredOrders(100);
   const [resending, setResending] = useState<string | null>(null);
   const [confirmResendId, setConfirmResendId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -17,28 +20,16 @@ export default function ExpiredOrders() {
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 4000);
   };
 
-  const loadExpiredOrders = async () => {
-    try {
-      setLoading(true);
-      const data = await fetchExpiredOrders(100);
-      setOrders(data);
-    } catch (error) {
-      console.error('Failed to load expired orders:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadExpiredOrders();
-  }, []);
-
   const handleResend = async (orderId: string) => {
     try {
       setResending(orderId);
       await resendOrder(orderId);
       showToast('Order resent successfully', 'success');
-      await loadExpiredOrders();
+      // Resend creates a new active order; refresh both lists.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: expiredOrdersQueryKey(100) }),
+        qc.invalidateQueries({ queryKey: ordersQueryKey() }),
+      ]);
     } catch (error) {
       console.error('Failed to resend order:', error);
       showToast('Failed to resend order', 'error');
@@ -121,7 +112,7 @@ export default function ExpiredOrders() {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-xl font-semibold text-white">Expired Orders</h2>
         <button
-          onClick={loadExpiredOrders}
+          onClick={() => refetch()}
           className="px-4 py-2 bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-lg transition-colors text-sm font-medium"
         >
           Refresh
@@ -137,7 +128,7 @@ export default function ExpiredOrders() {
         </div>
       ) : (
         <div className="space-y-3">
-          {orders.map((order) => (
+          {orders.map((order: Order) => (
             <div
               key={order.id}
               className="bg-slate-800/80 rounded-xl p-4 border border-slate-700/50"

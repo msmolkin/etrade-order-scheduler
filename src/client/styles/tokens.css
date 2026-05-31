@@ -1,0 +1,74 @@
+/*
+ * Slice 1: navy color tokens for redesign-v1.1.
+ *
+ * The brief specifies a near-black canvas (#0b0d10). Owner override:
+ * use a deep navy instead. All values are oklch() so dark-mode contrast
+ * stays consistent across surfaces.
+ *
+ * Status colors (--ok / --bad / --info / --accent / --paused) are reused
+ * by status pills, dot indicators, and the SystemStatusBar.
+ */
+
+:root {
+  /* Surfaces - deep navy ramp */
+  --bg-0: oklch(0.18 0.04 250); /* canvas */
+  --bg-1: oklch(0.22 0.05 250); /* surface */
+  --bg-2: oklch(0.27 0.06 245); /* raised */
+  --bg-3: oklch(0.32 0.07 240); /* modal / highest */
+
+  /* Text */
+  --text: oklch(0.96 0.01 240);
+  --text-dim: oklch(0.7 0.02 240);
+
+  /* Status */
+  --accent: oklch(0.78 0.13 75); /* warm amber - imminent / scheduled */
+  --ok: oklch(0.78 0.16 145); /* green - filled / healthy */
+  --bad: oklch(0.65 0.22 25); /* red - rejected / auth broken */
+  --bad-bg: oklch(0.2 0.07 15); /* dark maroon - auth-broken bar bg */
+  --info: oklch(0.7 0.13 230); /* blue - submitted */
+  --paused: oklch(0.55 0.02 240); /* neutral */
+}
+
+/* Heartbeat dot pulse - used by SystemStatusBar.
+   Keyframe is namespaced (tp-) to avoid clashing with Tailwind’s
+   built-in pulse animation. */
+@keyframes tp-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.85);
+  }
+}
+
+.tp-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ok);
+}
+.tp-dot.pulse {
+  animation: tp-pulse 1.6s ease-in-out infinite;
+}
+
+.tp-dot.bad {
+  background: var(--bad);
+}
+.tp-dot.warn {
+  background: var(--accent);
+}
+.tp-dot.paused {
+  background: var(--paused);
+  animation: none;
+}
+
+/* Spinner for in-progress states (e.g. AuthFix checklist). */
+@keyframes tp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
